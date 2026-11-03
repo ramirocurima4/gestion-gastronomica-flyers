@@ -1,0 +1,32 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Entornos virtuales
+venv/
+.venv/
+env/
+ENV/
+
+# Archivos temporales de bloqueo de Excel y respaldos
+~$*.xlsx
+*.tmp.xlsx
+*.bak
+
+# Flyers generados en pruebas (preservando la carpeta output/)
+output/*.png
+output/*.jpg
+!output/.gitkeep
+!templates/.gitkeep
+!data/.gitkeep
+
+# IDEs y editores
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
