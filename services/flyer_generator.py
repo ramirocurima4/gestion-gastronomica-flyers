@@ -49,6 +49,7 @@ class FlyerGenerator:
         self.output_dir: str = os.path.abspath(output_dir)
         os.makedirs(self.templates_dir, exist_ok=True)
         os.makedirs(self.output_dir, exist_ok=True)
+        self._cache_fondo_oscuro: Optional[Image.Image] = None
         self.default_template_path: str = os.path.join(
             self.templates_dir, "plantilla_oscura_default.png"
         )
@@ -94,8 +95,11 @@ class FlyerGenerator:
             except OSError:
                 continue
 
-        # Segundo intento por nombre directo en el path de Pillow
-        for nombre in (["DejaVuSans-Bold.ttf", "arialbd.ttf"] if negrita else ["DejaVuSans.ttf", "arial.ttf"]):
+        for nombre in (
+            ["DejaVuSans-Bold.ttf", "arialbd.ttf"]
+            if negrita
+            else ["DejaVuSans.ttf", "arial.ttf"]
+        ):
             try:
                 return ImageFont.truetype(nombre, tamano)
             except OSError:
@@ -110,11 +114,14 @@ class FlyerGenerator:
         """
         Genera programáticamente un lienzo vertical 1080x1920 con un degradado oscuro
         elegante y detalles geométricos sutiles de estética gastronómica.
+        Utiliza caché en memoria para acelerar las previsualizaciones en vivo.
         """
+        if self._cache_fondo_oscuro is not None:
+            return self._cache_fondo_oscuro.copy()
+
         base = Image.new("RGBA", (self.ANCHO, self.ALTO), (12, 16, 28, 255))
         draw = ImageDraw.Draw(base)
 
-        # Degradado vertical suave en escala oscura (#0F172A -> #181826 -> #090D16)
         r_ini, g_ini, b_ini = (15, 23, 42)
         r_med, g_med, b_med = (26, 24, 41)
         r_fin, g_fin, b_fin = (9, 13, 22)
@@ -133,22 +140,29 @@ class FlyerGenerator:
                 b = int(b_med + (b_fin - b_med) * t)
             draw.line([(0, y), (self.ANCHO, y)], fill=(r, g, b, 255))
 
-        # Capa decorativa con acentos cálidos sutiles en esquinas y bordes
         decoracion = Image.new("RGBA", (self.ANCHO, self.ALTO), (0, 0, 0, 0))
         d_draw = ImageDraw.Draw(decoracion)
 
-        # Círculos decorativos traslúcidos (halo cálido superior e inferior)
         for radio, alpha in [(520, 14), (380, 18), (240, 22)]:
             d_draw.ellipse(
-                [self.ANCHO // 2 - radio, -radio // 2, self.ANCHO // 2 + radio, radio + radio // 2],
+                [
+                    self.ANCHO // 2 - radio,
+                    -radio // 2,
+                    self.ANCHO // 2 + radio,
+                    radio + radio // 2,
+                ],
                 fill=(245, 158, 11, alpha),
             )
             d_draw.ellipse(
-                [self.ANCHO // 2 - radio, self.ALTO - radio, self.ANCHO // 2 + radio, self.ALTO + radio],
+                [
+                    self.ANCHO // 2 - radio,
+                    self.ALTO - radio,
+                    self.ANCHO // 2 + radio,
+                    self.ALTO + radio,
+                ],
                 fill=(234, 88, 12, alpha),
             )
 
-        # Marco interior fino dorado muy sutil
         margen_marco = 28
         d_draw.rounded_rectangle(
             [margen_marco, margen_marco, self.ANCHO - margen_marco, self.ALTO - margen_marco],
@@ -157,7 +171,8 @@ class FlyerGenerator:
             width=2,
         )
 
-        return Image.alpha_composite(base, decoracion)
+        self._cache_fondo_oscuro = Image.alpha_composite(base, decoracion)
+        return self._cache_fondo_oscuro.copy()
 
     def asegurar_plantilla_por_defecto(self) -> str:
         """
@@ -178,7 +193,11 @@ class FlyerGenerator:
         o genera el fondo degradado oscuro por defecto si no se provee plantilla.
         """
         ruta_a_usar: Optional[str] = None
-        if plantilla_path and str(plantilla_path).strip() and os.path.exists(str(plantilla_path).strip()):
+        if (
+            plantilla_path
+            and str(plantilla_path).strip()
+            and os.path.exists(str(plantilla_path).strip())
+        ):
             ruta_a_usar = str(plantilla_path).strip()
 
         if ruta_a_usar:
@@ -190,7 +209,6 @@ class FlyerGenerator:
                         (self.ANCHO, self.ALTO),
                         method=Image.Resampling.LANCZOS,
                     )
-                # Aplicar un velo oscuro suave para asegurar contraste de lectura
                 velo = Image.new("RGBA", (self.ANCHO, self.ALTO), (10, 14, 24, 75))
                 return Image.alpha_composite(lienzo, velo)
             except Exception as exc:
@@ -242,7 +260,6 @@ class FlyerGenerator:
                     lineas.append(linea_actual)
                     linea_actual = palabra
                 else:
-                    # Palabra individual demasiado larga
                     lineas.append(palabra)
                     linea_actual = ""
 
@@ -268,7 +285,6 @@ class FlyerGenerator:
         capa = Image.new("RGBA", lienzo.size, (0, 0, 0, 0))
         draw = ImageDraw.Draw(capa)
 
-        # Badge superior "MENÚ & PROMOCIONES DEL DÍA"
         fuente_badge = self._cargar_fuente(24, negrita=True)
         texto_badge = "•  MENÚ & PROMOCIONES DEL DÍA  •"
         ancho_b, alto_b = self._medir_texto(draw, texto_badge, fuente_badge)
@@ -293,7 +309,6 @@ class FlyerGenerator:
             anchor="mm",
         )
 
-        # Título principal adaptable ("PROMOS DE HOY" / "MENÚ DEL DÍA")
         titulo_limpio = (titulo.strip() if titulo and titulo.strip() else "PROMOS DE HOY").upper()
         tamano_titulo = 74
         fuente_titulo = self._cargar_fuente(tamano_titulo, negrita=True)
@@ -305,7 +320,6 @@ class FlyerGenerator:
             fuente_titulo = self._cargar_fuente(tamano_titulo, negrita=True)
 
         y_titulo = by2 + 68
-        # Sombra del título
         draw.text(
             (self.ANCHO // 2 + 4, y_titulo + 4),
             titulo_limpio,
@@ -321,7 +335,6 @@ class FlyerGenerator:
             anchor="mm",
         )
 
-        # Línea divisoria decorativa
         y_linea = y_titulo + 58
         ancho_linea = 280
         draw.rounded_rectangle(
@@ -351,18 +364,27 @@ class FlyerGenerator:
         """
         items = productos[: self.MAX_PRODUCTOS]
         cantidad = len(items)
-        if cantidad == 0:
-            return
-
         capa = Image.new("RGBA", lienzo.size, (0, 0, 0, 0))
         draw = ImageDraw.Draw(capa)
+
+        if cantidad == 0:
+            fuente_vacio = self._cargar_fuente(34, negrita=True)
+            y_centro = (y_inicio + y_fin) // 2
+            draw.text(
+                (self.ANCHO // 2, y_centro),
+                "Seleccione hasta 6 platos del menú",
+                font=fuente_vacio,
+                fill=self.COLOR_TEXTO_GRIS,
+                anchor="mm",
+            )
+            lienzo.alpha_composite(capa)
+            return
 
         alto_disponible = y_fin - y_inicio
         margen_x = 64
         x1_card = margen_x
         x2_card = self.ANCHO - margen_x
 
-        # Cálculo dinámico de altura de tarjeta y espaciado vertical
         if cantidad == 1:
             alto_card = 270
             espacio = 0
@@ -379,14 +401,12 @@ class FlyerGenerator:
             alto_card = 196
             espacio = 22
         else:
-            # 6 productos
             espacio = 18
             alto_card = min(176, (alto_disponible - (espacio * (cantidad - 1))) // cantidad)
 
         alto_bloque_total = (alto_card * cantidad) + (espacio * (cantidad - 1))
         y_actual = y_inicio + max(0, (alto_disponible - alto_bloque_total) // 2)
 
-        # Tamaños tipográficos adaptados a la densidad de tarjetas
         es_compacto = cantidad >= 5
         fuente_cat = self._cargar_fuente(20 if es_compacto else 22, negrita=True)
         fuente_nombre = self._cargar_fuente(32 if es_compacto else 36, negrita=True)
@@ -397,14 +417,12 @@ class FlyerGenerator:
             y1 = y_actual
             y2 = y1 + alto_card
 
-            # 1. Sombra proyectada de la tarjeta
             draw.rounded_rectangle(
                 [x1_card + 6, y1 + 8, x2_card + 6, y2 + 8],
                 radius=26,
                 fill=self.COLOR_SOMBRA,
             )
 
-            # 2. Cuerpo principal semitransparente RGBA
             draw.rounded_rectangle(
                 [x1_card, y1, x2_card, y2],
                 radius=26,
@@ -413,14 +431,12 @@ class FlyerGenerator:
                 width=2,
             )
 
-            # 3. Barra lateral izquierda de acento cálido
             draw.rounded_rectangle(
                 [x1_card, y1 + 18, x1_card + 12, y2 - 18],
                 radius=6,
                 fill=self.COLOR_ACENTO_AMBAR,
             )
 
-            # 4. Precio formateado en pesos argentinos ($ {:,.0f}) a la derecha
             texto_precio = f"$ {prod.precio:,.0f}"
             ancho_precio, alto_precio = self._medir_texto(draw, texto_precio, fuente_precio)
 
@@ -447,12 +463,10 @@ class FlyerGenerator:
                 anchor="mm",
             )
 
-            # 5. Bloque izquierdo: Categoría, Nombre y Descripción
             x_texto = x1_card + 36
             max_ancho_texto = max(280, px1 - x_texto - 26)
             y_cursor = y1 + (16 if es_compacto else 22)
 
-            # Etiqueta de categoría
             cat_upper = prod.categoria.strip().upper()
             draw.text(
                 (x_texto, y_cursor),
@@ -463,7 +477,6 @@ class FlyerGenerator:
             _, alto_cat = self._medir_texto(draw, cat_upper, fuente_cat)
             y_cursor += alto_cat + (6 if es_compacto else 10)
 
-            # Nombre del producto (1 o 2 líneas según longitud)
             lineas_nombre = self._ajustar_texto_multilinea(
                 draw,
                 prod.nombre,
@@ -481,7 +494,6 @@ class FlyerGenerator:
                 _, alto_n = self._medir_texto(draw, linea_n, fuente_nombre)
                 y_cursor += alto_n + 4
 
-            # Descripción del producto (si existe y hay espacio vertical)
             if prod.descripcion and y_cursor + 24 < (y2 - 14):
                 y_cursor += 4
                 max_lineas_desc = 1 if (es_compacto or len(lineas_nombre) > 1) else 2
@@ -520,7 +532,6 @@ class FlyerGenerator:
         fy1 = 1672
         fy2 = 1852
 
-        # Sombra y contenedor principal del footer
         draw.rounded_rectangle(
             [margen_x + 4, fy1 + 6, self.ANCHO - margen_x + 4, fy2 + 6],
             radius=28,
@@ -543,7 +554,6 @@ class FlyerGenerator:
         else:
             texto_principal = "¡HACÉ TU PEDIDO POR WHATSAPP!"
 
-        # Ícono circular de WhatsApp + texto centrado
         ancho_txt, _ = self._medir_texto(draw, texto_principal, fuente_wa)
         radio_icono = 24
         espacio_icono = 18
@@ -551,7 +561,6 @@ class FlyerGenerator:
         x_inicio = (self.ANCHO - ancho_conjunto) // 2
         y_centro_wa = fy1 + 62
 
-        # Círculo verde WhatsApp
         cx = x_inicio + radio_icono
         cy = y_centro_wa
         draw.ellipse(
@@ -561,7 +570,6 @@ class FlyerGenerator:
         fuente_wa_simbolo = self._cargar_fuente(24, negrita=True)
         draw.text((cx, cy), "WA", font=fuente_wa_simbolo, fill=(255, 255, 255, 255), anchor="mm")
 
-        # Texto principal de WhatsApp
         draw.text(
             (x_inicio + (radio_icono * 2) + espacio_icono, y_centro_wa),
             texto_principal,
@@ -570,7 +578,6 @@ class FlyerGenerator:
             anchor="lm",
         )
 
-        # Subtítulo de entregas
         texto_entrega = "Envíos rápidos a domicilio (Delivery)  •  Retiro en Mostrador"
         draw.text(
             (self.ANCHO // 2, fy1 + 132),
@@ -581,6 +588,29 @@ class FlyerGenerator:
         )
 
         lienzo.alpha_composite(capa)
+
+    def componer_imagen_flyer(
+        self,
+        productos: List[Producto],
+        plantilla_path: Optional[str] = None,
+        titulo: str = "PROMOS DE HOY",
+        whatsapp: str = "",
+    ) -> Image.Image:
+        """
+        Compone en memoria el lienzo completo del flyer (1080x1920 px) sin escribir a disco.
+        Ideal para actualizar la previsualización en vivo de manera instantánea.
+        """
+        lienzo = self._preparar_lienzo_base(plantilla_path)
+        y_inicio_productos = self._dibujar_encabezado(lienzo, titulo)
+        y_fin_productos = 1645
+        self._dibujar_bloque_productos(
+            lienzo=lienzo,
+            productos=productos[: self.MAX_PRODUCTOS],
+            y_inicio=y_inicio_productos,
+            y_fin=y_fin_productos,
+        )
+        self._dibujar_footer(lienzo, whatsapp)
+        return lienzo
 
     def generar_flyer(
         self,
@@ -608,26 +638,13 @@ class FlyerGenerator:
             raise ValueError("Debe seleccionar al menos un producto para generar el flyer.")
 
         os.makedirs(self.output_dir, exist_ok=True)
-
-        # 1. Preparar lienzo base 1080x1920 (plantilla de usuario o degradado oscuro)
-        lienzo = self._preparar_lienzo_base(plantilla_path)
-
-        # 2. Dibujar encabezado
-        y_inicio_productos = self._dibujar_encabezado(lienzo, titulo)
-
-        # 3. Dibujar bloque de tarjetas de productos (máximo 6 items)
-        y_fin_productos = 1645
-        self._dibujar_bloque_productos(
-            lienzo=lienzo,
-            productos=productos[: self.MAX_PRODUCTOS],
-            y_inicio=y_inicio_productos,
-            y_fin=y_fin_productos,
+        lienzo = self.componer_imagen_flyer(
+            productos=productos,
+            plantilla_path=plantilla_path,
+            titulo=titulo,
+            whatsapp=whatsapp,
         )
 
-        # 4. Dibujar pie de página fijo con WhatsApp y aviso de entrega
-        self._dibujar_footer(lienzo, whatsapp)
-
-        # 5. Exportar imagen final en alta calidad
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         nombre_archivo = f"flyer_{timestamp}.png"
         ruta_salida = os.path.abspath(os.path.join(self.output_dir, nombre_archivo))

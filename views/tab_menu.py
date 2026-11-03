@@ -1,6 +1,8 @@
 """
 Vista de la pestaña 'Gestión de Menú y Precios' (Módulo 1).
-Permite alta, edición, baja de productos en tabla interactiva y aumento porcentual masivo por categoría.
+Permite alta, edición y baja de productos en tabla interactiva, con transición
+dinámica de estado en el formulario (Modo Nuevo vs Modo Edición) y confirmación
+defensiva en el aumento porcentual masivo por categoría.
 """
 
 from tkinter import messagebox, ttk
@@ -236,7 +238,6 @@ class TabMenu(ctk.CTkFrame):
         card_tabla.grid_columnconfigure(0, weight=1)
         card_tabla.grid_rowconfigure(1, weight=1)
 
-        # Barra superior de búsqueda y estadísticas
         barra_sup = ctk.CTkFrame(card_tabla, fg_color="transparent")
         barra_sup.grid(row=0, column=0, columnspan=2, sticky="ew", padx=16, pady=(14, 10))
         barra_sup.grid_columnconfigure(1, weight=1)
@@ -274,7 +275,6 @@ class TabMenu(ctk.CTkFrame):
         )
         btn_recargar.grid(row=0, column=3)
 
-        # Configuración visual del Treeview adaptado a modo oscuro/moderno
         estilo = ttk.Style()
         estilo.theme_use("clam")
         estilo.configure(
@@ -335,7 +335,7 @@ class TabMenu(ctk.CTkFrame):
 
         ctk.CTkLabel(
             card_tabla,
-            text="💡 Haga clic sobre cualquier fila de la tabla para cargar el plato en el formulario de edición.",
+            text="💡 Haga clic sobre cualquier fila de la tabla para pasar a Modo Edición ('Actualizar Producto').",
             font=ctk.CTkFont(size=11),
             text_color="#94A3B8",
         ).grid(row=2, column=0, columnspan=2, sticky="w", padx=16, pady=(0, 12))
@@ -360,7 +360,11 @@ class TabMenu(ctk.CTkFrame):
 
         self.combo_categoria.configure(values=todas)
 
-        opciones_masivas = ["Todas las categorías"] + sorted(existentes) if existentes else ["Todas las categorías"] + todas
+        opciones_masivas = (
+            ["Todas las categorías"] + sorted(existentes)
+            if existentes
+            else ["Todas las categorías"] + todas
+        )
         seleccion_previa = self.combo_cat_masiva.get()
         self.combo_cat_masiva.configure(values=opciones_masivas)
         if seleccion_previa not in opciones_masivas:
@@ -371,7 +375,9 @@ class TabMenu(ctk.CTkFrame):
         for item in self.tree.get_children():
             self.tree.delete(item)
 
-        filtro = self.entry_buscar.get().strip().lower() if hasattr(self, "entry_buscar") else ""
+        filtro = (
+            self.entry_buscar.get().strip().lower() if hasattr(self, "entry_buscar") else ""
+        )
         mostrados = 0
 
         for prod in self.productos_cache:
@@ -401,7 +407,11 @@ class TabMenu(ctk.CTkFrame):
         self.lbl_contador.configure(text=f"{mostrados} producto(s)")
 
     def _al_seleccionar_fila(self, _event: object) -> None:
-        """Carga los datos del producto seleccionado en el formulario izquierdo."""
+        """
+        Carga los datos del producto seleccionado en el formulario izquierdo y cambia
+        dinámicamente el botón principal de 'Guardar Producto' (Modo Nuevo) a
+        'Actualizar Producto' (Modo Edición).
+        """
         seleccion = self.tree.selection()
         if not seleccion:
             return
@@ -417,11 +427,11 @@ class TabMenu(ctk.CTkFrame):
 
         self.producto_seleccionado_id = producto.id
         self.lbl_modo_edicion.configure(
-            text=f"EDITANDO ID #{producto.id}",
+            text=f"MODO: EDICIÓN (#{producto.id})",
             text_color="#FBBF24",
         )
         self.btn_guardar.configure(
-            text=f"Actualizar Producto (#{producto.id})",
+            text="Actualizar Producto",
             fg_color="#2563EB",
             hover_color="#1D4ED8",
         )
@@ -439,7 +449,7 @@ class TabMenu(ctk.CTkFrame):
         self.txt_descripcion.insert("1.0", producto.descripcion)
 
     def limpiar_formulario(self) -> None:
-        """Restablece el formulario al modo de alta de nuevo producto."""
+        """Restablece el formulario al modo de alta de nuevo producto ('Guardar Producto')."""
         self.producto_seleccionado_id = None
         if self.tree.selection():
             self.tree.selection_remove(self.tree.selection())
@@ -486,7 +496,7 @@ class TabMenu(ctk.CTkFrame):
         if not exito:
             messagebox.showerror(
                 "Error de Persistencia",
-                self.excel_manager.ultimo_error or "No se pudo guardar el producto en Excel.",
+                self.excel_manager.ultimo_error or ExcelManager.MENSAJE_ARCHIVO_ABIERTO,
             )
             return
 
@@ -513,7 +523,7 @@ class TabMenu(ctk.CTkFrame):
         if not exito:
             messagebox.showerror(
                 "Error al Eliminar",
-                self.excel_manager.ultimo_error or "No se pudo eliminar el producto.",
+                self.excel_manager.ultimo_error or ExcelManager.MENSAJE_ARCHIVO_ABIERTO,
             )
             return
 
@@ -524,7 +534,10 @@ class TabMenu(ctk.CTkFrame):
         messagebox.showinfo("Producto Eliminado", f"'{nombre_actual}' fue eliminado del menú.")
 
     def _accion_aumento_masivo(self) -> None:
-        """Ejecuta el aumento o descuento porcentual masivo por categoría."""
+        """
+        Ejecuta el aumento o descuento porcentual masivo por categoría tras desplegar
+        un cuadro emergente de confirmación defensiva.
+        """
         categoria = self.combo_cat_masiva.get().strip()
         porcentaje_str = self.entry_porcentaje.get().strip().replace(",", ".")
 
@@ -551,11 +564,9 @@ class TabMenu(ctk.CTkFrame):
             )
             return
 
-        signo = "+" if porcentaje > 0 else ""
         confirmar = messagebox.askyesno(
-            "Confirmar Actualización Masiva",
-            f"¿Desea aplicar un ajuste de {signo}{porcentaje:g}% a '{categoria}'?\n\n"
-            "Los nuevos precios se guardarán automáticamente en 'datos_rotiseria.xlsx'.",
+            "Confirmar Ajuste Porcentual Masivo",
+            f"¿Está seguro de aplicar un incremento del {porcentaje:g}% en la categoría '{categoria}'?",
         )
         if not confirmar:
             return
@@ -578,6 +589,7 @@ class TabMenu(ctk.CTkFrame):
         if self.on_menu_change:
             self.on_menu_change()
 
+        signo = "+" if porcentaje > 0 else ""
         messagebox.showinfo(
             "Precios Actualizados",
             f"Se actualizaron correctamente los precios de {afectados} producto(s) "

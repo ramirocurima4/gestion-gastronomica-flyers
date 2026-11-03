@@ -1,0 +1,11 @@
+============================================================
+       REPORTE DE CIERRE DE CAJA / ARQUEO DIARIO
+============================================================
+Fecha Operativa : 2026-11-03
+Hora de Cierre  : 2026-11-03 17:07:25
+------------------------------------------------------------
+Total Efectivo en Caja     : $ 64.000
+Total Transferencias / MP  : $ 77.500
+Total Recaudado            : $ 141.500
+Cantidad de Pedidos        : 2 (Mostrador: 1 | Delivery: 1)
+============================================================

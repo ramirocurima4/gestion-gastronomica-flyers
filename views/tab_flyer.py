@@ -1,7 +1,8 @@
 """
-Vista de la pestaña 'Generador Gráfico de Flyers' (Módulo 3).
-Permite seleccionar productos del menú, personalizar plantilla/título/WhatsApp,
-generar el flyer en 1080x1920 px y previsualizarlo escalado en pantalla.
+Vista de la pestaña 'Generador Gráfico de Flyers' (Módulo 2 / 3).
+Permite seleccionar hasta 6 productos del menú, personalizar plantilla/título/WhatsApp,
+previsualizar en vivo en formato vertical escalado (9:16) manteniendo la referencia
+fija de CTkImage en memoria y exportar el flyer en alta calidad (1080x1920 px).
 """
 
 import os
@@ -20,7 +21,7 @@ from services.flyer_generator import FlyerGenerator
 
 class TabFlyer(ctk.CTkFrame):
     """
-    Interfaz de diseño y previsualización de flyers verticales (9:16) para
+    Interfaz de diseño y previsualización en vivo de flyers verticales (9:16) para
     Estados de WhatsApp e Historias de Instagram.
     """
 
@@ -49,13 +50,15 @@ class TabFlyer(ctk.CTkFrame):
         self.checkbox_vars: Dict[int, ctk.BooleanVar] = {}
         self.plantilla_seleccionada: Optional[str] = None
         self.ultimo_flyer_generado: Optional[str] = None
+
+        # Referencia persistente a la instancia de CTkImage para evitar que el
+        # Garbage Collector (GC) de Python destruya la imagen del canvas en memoria
         self._ctk_preview_image: Optional[ctk.CTkImage] = None
 
         self._configurar_grilla()
         self._construir_panel_configuracion()
         self._construir_panel_previsualizacion()
         self.refrescar_productos()
-        self._mostrar_preview_inicial()
 
     def _configurar_grilla(self) -> None:
         """Divide la pestaña en panel de configuración/selección (izq) y previsualización (der)."""
@@ -155,9 +158,11 @@ class TabFlyer(ctk.CTkFrame):
             card_ajustes,
             values=self.TITULOS_SUGERIDOS,
             height=34,
+            command=lambda _val: self._actualizar_preview_en_vivo(),
         )
         self.combo_titulo.set("PROMOS DE HOY")
         self.combo_titulo.grid(row=2, column=0, sticky="ew", padx=(16, 8), pady=(0, 10))
+        self.combo_titulo.bind("<KeyRelease>", lambda _e: self._actualizar_preview_en_vivo())
 
         self.entry_whatsapp = ctk.CTkEntry(
             card_ajustes,
@@ -166,6 +171,7 @@ class TabFlyer(ctk.CTkFrame):
         )
         self.entry_whatsapp.insert(0, "3794-556677")
         self.entry_whatsapp.grid(row=2, column=1, sticky="ew", padx=(8, 16), pady=(0, 10))
+        self.entry_whatsapp.bind("<KeyRelease>", lambda _e: self._actualizar_preview_en_vivo())
 
         # Selector de plantilla (.png / .jpg)
         ctk.CTkLabel(
@@ -212,7 +218,7 @@ class TabFlyer(ctk.CTkFrame):
         # Botón Principal de Generación
         self.btn_generar = ctk.CTkButton(
             card_ajustes,
-            text="🎨  GENERAR FLYER PROMOCIONAL (1080x1920 px)",
+            text="🎨  EXPORTAR FLYER PROMOCIONAL (1080x1920 px .PNG)",
             height=44,
             fg_color="#EA580C",
             hover_color="#C2410C",
@@ -253,7 +259,7 @@ class TabFlyer(ctk.CTkFrame):
 
         self.lbl_ruta_exportada = ctk.CTkLabel(
             card_preview,
-            text="Listo para exportar en carpeta 'output/'",
+            text="Previsualización en vivo activa • Listo para exportar",
             font=ctk.CTkFont(size=11),
             text_color="#94A3B8",
             wraplength=300,
@@ -271,13 +277,21 @@ class TabFlyer(ctk.CTkFrame):
         self.btn_abrir_output.grid(row=3, column=0, sticky="ew", padx=18, pady=(0, 14))
 
     # =========================================================================
-    # LÓGICA DE SELECCIÓN Y RENDERIZADO
+    # LÓGICA DE SELECCIÓN Y PREVISUALIZACIÓN EN VIVO ESCALADA
     # =========================================================================
+
+    def _obtener_productos_seleccionados(self) -> List[Producto]:
+        """Retorna la lista de productos cuyos checkboxes están actualmente marcados."""
+        return [
+            prod
+            for prod in self.productos_disponibles
+            if self.checkbox_vars.get(prod.id) and self.checkbox_vars[prod.id].get()
+        ]
 
     def refrescar_productos(self) -> None:
         """
         Recarga los productos desde Excel preservando las selecciones previas
-        que continúen existiendo.
+        que continúen existiendo y actualiza la vista previa en vivo.
         """
         ids_previamente_marcados = {
             pid for pid, var in self.checkbox_vars.items() if var.get()
@@ -296,13 +310,15 @@ class TabFlyer(ctk.CTkFrame):
                 text_color="#94A3B8",
             ).grid(row=0, column=0, padx=10, pady=20)
             self._actualizar_contador_seleccion()
+            self._actualizar_preview_en_vivo()
             return
 
-        # Si es la primera carga y no había selección, preseleccionar hasta los primeros 4
         preseleccionar_inicial = len(ids_previamente_marcados) == 0
 
         for idx, prod in enumerate(self.productos_disponibles):
-            fila_item = ctk.CTkFrame(self.scroll_productos, corner_radius=8, fg_color="#1E293B")
+            fila_item = ctk.CTkFrame(
+                self.scroll_productos, corner_radius=8, fg_color="#1E293B"
+            )
             fila_item.grid(row=idx, column=0, sticky="ew", padx=4, pady=4)
             fila_item.grid_columnconfigure(0, weight=1)
 
@@ -340,12 +356,18 @@ class TabFlyer(ctk.CTkFrame):
                     text_color="#94A3B8",
                     anchor="w",
                 )
-                lbl_desc.grid(row=1, column=0, columnspan=2, sticky="w", padx=38, pady=(0, 6))
+                lbl_desc.grid(
+                    row=1, column=0, columnspan=2, sticky="w", padx=38, pady=(0, 6)
+                )
 
         self._actualizar_contador_seleccion()
+        self._actualizar_preview_en_vivo()
 
     def _al_cambiar_checkbox(self, prod_id: int) -> None:
-        """Verifica que no se seleccionen más de 6 productos por flyer."""
+        """
+        Verifica el cupo máximo de 6 productos por flyer y actualiza inmediatamente
+        la imagen de la columna Vista Previa (Formato 9:16).
+        """
         marcados = [pid for pid, var in self.checkbox_vars.items() if var.get()]
         if len(marcados) > FlyerGenerator.MAX_PRODUCTOS:
             self.checkbox_vars[prod_id].set(False)
@@ -354,7 +376,10 @@ class TabFlyer(ctk.CTkFrame):
                 f"Para garantizar la legibilidad en celulares, se permiten hasta "
                 f"{FlyerGenerator.MAX_PRODUCTOS} productos por flyer.",
             )
+            return
+
         self._actualizar_contador_seleccion()
+        self._actualizar_preview_en_vivo()
 
     def _actualizar_contador_seleccion(self) -> None:
         """Actualiza la etiqueta del contador de productos marcados."""
@@ -366,17 +391,19 @@ class TabFlyer(ctk.CTkFrame):
         )
 
     def _seleccionar_primeros_cuatro(self) -> None:
-        """Marca automáticamente los primeros 4 productos de la lista."""
+        """Marca automáticamente los primeros 4 productos de la lista y refresca la vista previa."""
         for idx, prod in enumerate(self.productos_disponibles):
             if prod.id in self.checkbox_vars:
                 self.checkbox_vars[prod.id].set(idx < 4)
         self._actualizar_contador_seleccion()
+        self._actualizar_preview_en_vivo()
 
     def _desmarcar_todos(self) -> None:
-        """Limpia todos los checkboxes de productos."""
+        """Limpia todos los checkboxes de productos y refresca la vista previa."""
         for var in self.checkbox_vars.values():
             var.set(False)
         self._actualizar_contador_seleccion()
+        self._actualizar_preview_en_vivo()
 
     def _seleccionar_archivo_plantilla(self) -> None:
         """Abre un cuadro de diálogo para elegir una imagen de fondo (.png / .jpg)."""
@@ -395,6 +422,7 @@ class TabFlyer(ctk.CTkFrame):
                 text=f"Plantilla activa: {nombre_corto}",
                 text_color="#4ADE80",
             )
+            self._actualizar_preview_en_vivo()
 
     def _restablecer_plantilla_default(self) -> None:
         """Vuelve a configurar el fondo degradado oscuro programático por defecto."""
@@ -403,42 +431,76 @@ class TabFlyer(ctk.CTkFrame):
             text="Fondo degradado oscuro elegante (Por defecto)",
             text_color="#38BDF8",
         )
+        self._actualizar_preview_en_vivo()
 
-    def _mostrar_preview_inicial(self) -> None:
-        """Muestra la plantilla oscura por defecto en el panel de previsualización."""
-        ruta_default = self.flyer_generator.default_template_path
-        if os.path.exists(ruta_default):
-            self._cargar_imagen_en_preview(ruta_default)
-
-    def _cargar_imagen_en_preview(self, ruta_imagen: str) -> None:
-        """Carga y escala proporcionalmente una imagen en el widget CTkLabel de vista previa."""
+    def _renderizar_pil_en_preview(self, imagen_pil: Image.Image) -> None:
+        """
+        Escala una imagen PIL a (PREVIEW_WIDTH x PREVIEW_HEIGHT) y actualiza el widget
+        CTkLabel manteniendo una referencia fija en `self._ctk_preview_image` para
+        evitar que el recolector de basura (GC) de Python destruya el recurso en memoria.
+        """
         try:
-            with Image.open(ruta_imagen) as img:
-                copia_preview = img.convert("RGBA").resize(
-                    (self.PREVIEW_WIDTH, self.PREVIEW_HEIGHT),
-                    Image.Resampling.LANCZOS,
-                )
+            copia_preview = imagen_pil.convert("RGBA").resize(
+                (self.PREVIEW_WIDTH, self.PREVIEW_HEIGHT),
+                Image.Resampling.LANCZOS,
+            )
             self._ctk_preview_image = ctk.CTkImage(
                 light_image=copia_preview,
                 dark_image=copia_preview,
                 size=(self.PREVIEW_WIDTH, self.PREVIEW_HEIGHT),
             )
             self.lbl_imagen_preview.configure(image=self._ctk_preview_image, text="")
+            self.lbl_imagen_preview.image = self._ctk_preview_image  # type: ignore[attr-defined]
         except Exception as err:
             self.lbl_imagen_preview.configure(text=f"No se pudo previsualizar:\n{err}")
 
+    def _cargar_imagen_en_preview(self, ruta_imagen: str) -> None:
+        """Carga una imagen desde disco y la muestra en el panel de vista previa."""
+        try:
+            with Image.open(ruta_imagen) as img:
+                self._renderizar_pil_en_preview(img.copy())
+        except Exception as err:
+            self.lbl_imagen_preview.configure(text=f"No se pudo previsualizar:\n{err}")
+
+    def _actualizar_preview_en_vivo(self) -> None:
+        """
+        Compone dinámicamente en memoria el flyer con los platos actualmente tildados
+        y actualiza en tiempo real la columna 'Vista Previa (Formato 9:16)'.
+        """
+        if not hasattr(self, "lbl_imagen_preview"):
+            return
+
+        productos_elegidos = self._obtener_productos_seleccionados()
+        titulo = (
+            self.combo_titulo.get().strip()
+            if hasattr(self, "combo_titulo") and self.combo_titulo.get().strip()
+            else "PROMOS DE HOY"
+        )
+        whatsapp = (
+            self.entry_whatsapp.get().strip()
+            if hasattr(self, "entry_whatsapp")
+            else ""
+        )
+
+        try:
+            lienzo_vivo = self.flyer_generator.componer_imagen_flyer(
+                productos=productos_elegidos,
+                plantilla_path=self.plantilla_seleccionada,
+                titulo=titulo,
+                whatsapp=whatsapp,
+            )
+            self._renderizar_pil_en_preview(lienzo_vivo)
+        except Exception as err:
+            self.lbl_imagen_preview.configure(text=f"Error en vista previa:\n{err}")
+
     def _accion_generar_flyer(self) -> None:
-        """Recopila los productos seleccionados y genera el flyer promocional."""
-        productos_elegidos = [
-            prod
-            for prod in self.productos_disponibles
-            if self.checkbox_vars.get(prod.id) and self.checkbox_vars[prod.id].get()
-        ]
+        """Recopila los productos seleccionados y exporta el flyer promocional en alta resolución."""
+        productos_elegidos = self._obtener_productos_seleccionados()
 
         if not productos_elegidos:
             messagebox.showwarning(
                 "Sin Productos Seleccionados",
-                "Por favor, marque al menos 1 producto de la lista para generar el flyer.",
+                "Por favor, marque al menos 1 producto de la lista para exportar el flyer.",
             )
             return
 

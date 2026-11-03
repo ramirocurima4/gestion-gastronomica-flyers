@@ -1,6 +1,7 @@
 """
 Servicio de persistencia local en Excel ('data/datos_rotiseria.xlsx').
-Gestiona de forma atómica y segura las hojas 'Menu' y 'Ventas' utilizando openpyxl.
+Gestiona de forma atómica y segura las hojas 'Menu' y 'Ventas' combinando
+openpyxl (escritura atómica estilizada) y pandas (procesamiento tabular y arqueo).
 """
 
 from datetime import datetime
@@ -15,6 +16,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.utils.exceptions import InvalidFileException
 from openpyxl.workbook import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
+import pandas as pd
 
 from models.producto import Producto
 from models.venta import Venta
@@ -25,13 +27,14 @@ logger = logging.getLogger(__name__)
 class ExcelManager:
     """
     Gestor de persistencia local sobre archivo Excel (.xlsx).
-    Garantiza la existencia del archivo, el estilizado de cabeceras,
-    la escritura atómica mediante archivo temporal y el manejo defensivo
-    de bloqueos (PermissionError cuando el archivo está abierto en Excel).
+    Garantiza la existencia del archivo, el estilizado profesional de cabeceras,
+    la escritura atómica mediante archivo temporal (.tmp.xlsx) y el manejo defensivo
+    de bloqueos (PermissionError cuando el archivo está abierto en Excel/Calc).
     """
 
     HOJA_MENU: str = "Menu"
     HOJA_VENTAS: str = "Ventas"
+    HOJA_ARQUEOS: str = "Arqueos"
 
     ENCABEZADOS_MENU: List[str] = ["ID", "Nombre", "Categoria", "Precio", "Descripcion"]
     ENCABEZADOS_VENTAS: List[str] = [
@@ -42,6 +45,21 @@ class ExcelManager:
         "Medio_Pago",
         "Tipo_Entrega",
     ]
+    ENCABEZADOS_ARQUEOS: List[str] = [
+        "ID_Cierre",
+        "Fecha_Hora_Cierre",
+        "Fecha_Operativa",
+        "Cant_Pedidos",
+        "Mostrador",
+        "Delivery",
+        "Total_Efectivo",
+        "Total_Transferencia",
+        "Total_Recaudado",
+    ]
+
+    MENSAJE_ARCHIVO_ABIERTO: str = (
+        "El archivo datos_rotiseria.xlsx está abierto. Por favor, ciérrelo para guardar los cambios"
+    )
 
     def __init__(self, filepath: str = "data/datos_rotiseria.xlsx") -> None:
         """
@@ -76,21 +94,14 @@ class ExcelManager:
         lock_ms = os.path.join(directorio, f"~${nombre_archivo}")
         lock_lo = os.path.join(directorio, f".~lock.{nombre_archivo}#")
         if os.path.exists(lock_ms) or os.path.exists(lock_lo):
-            raise PermissionError(
-                f"El archivo '{nombre_archivo}' se encuentra abierto en Excel u otro visor de hojas "
-                "de cálculo. Por favor, ciérrelo antes de guardar cambios."
-            )
+            raise PermissionError(self.MENSAJE_ARCHIVO_ABIERTO)
 
         if os.path.exists(self.filepath):
-            # Prueba de apertura en modo lectura/escritura binaria
             try:
                 with open(self.filepath, "r+b"):
                     pass
             except PermissionError as exc:
-                raise PermissionError(
-                    f"Permiso denegado al acceder a '{nombre_archivo}'. "
-                    "Verifique que el archivo no esté abierto en otro programa."
-                ) from exc
+                raise PermissionError(self.MENSAJE_ARCHIVO_ABIERTO) from exc
 
     def _estilizar_hoja(self, ws: Worksheet, encabezados: List[str], anchos: List[int]) -> None:
         """
@@ -128,12 +139,14 @@ class ExcelManager:
     def _guardar_workbook_atomico(self, wb: Workbook) -> None:
         """
         Guarda el Workbook de manera atómica escribiendo primero en un archivo
-        temporal en el mismo directorio y luego reemplazando el archivo destino.
-        Esto evita pérdida o corrupción de datos ante cierres inesperados.
+        temporal (.tmp.xlsx) en el mismo directorio y luego reemplazando el archivo destino.
+        Esto evita pérdida o corrupción de datos ante cierres inesperados o cortes de energía.
         """
         self._verificar_bloqueo_archivo()
         directorio = os.path.dirname(self.filepath)
-        fd, temp_path = tempfile.mkstemp(suffix=".tmp.xlsx", prefix=".rotiseria_", dir=directorio)
+        fd, temp_path = tempfile.mkstemp(
+            suffix=".tmp.xlsx", prefix=".rotiseria_", dir=directorio
+        )
         os.close(fd)
 
         try:
@@ -146,10 +159,7 @@ class ExcelManager:
                     os.remove(temp_path)
                 except OSError:
                     pass
-            raise PermissionError(
-                "No se pudo guardar 'datos_rotiseria.xlsx' porque está abierto o bloqueado "
-                "por otro programa. Cierre el Excel e intente nuevamente."
-            ) from exc
+            raise PermissionError(self.MENSAJE_ARCHIVO_ABIERTO) from exc
         except Exception:
             if os.path.exists(temp_path):
                 try:
@@ -166,12 +176,10 @@ class ExcelManager:
         try:
             if not os.path.exists(self.filepath):
                 wb = Workbook()
-                # Configurar hoja Menu usando la hoja activa inicial
                 ws_menu = wb.active
                 ws_menu.title = self.HOJA_MENU
                 self._estilizar_hoja(ws_menu, self.ENCABEZADOS_MENU, [10, 32, 22, 16, 48])
 
-                # Crear hoja Ventas
                 ws_ventas = wb.create_sheet(title=self.HOJA_VENTAS)
                 self._estilizar_hoja(ws_ventas, self.ENCABEZADOS_VENTAS, [10, 22, 45, 16, 20, 18])
 
@@ -179,7 +187,6 @@ class ExcelManager:
                 wb.close()
                 return
 
-            # Si el archivo existe, verificar que contenga ambas hojas requeridas
             wb = openpyxl.load_workbook(self.filepath)
             modificado = False
 
@@ -233,7 +240,7 @@ class ExcelManager:
                 celda.alignment = Alignment(horizontal="left", vertical="center")
 
     # =========================================================================
-    # MÉTODOS OBLIGATORIOS DE GESTIÓN DE PRODUCTOS (HOJA 'Menu')
+    # MÉTODOS DE GESTIÓN DE PRODUCTOS (HOJA 'Menu')
     # =========================================================================
 
     def obtener_productos(self) -> List[Producto]:
@@ -272,9 +279,7 @@ class ExcelManager:
             return productos
 
         except PermissionError as exc:
-            self.ultimo_error = (
-                "No se pudo leer 'datos_rotiseria.xlsx' porque está bloqueado por otro programa."
-            )
+            self.ultimo_error = self.MENSAJE_ARCHIVO_ABIERTO
             logger.error("PermissionError al obtener productos: %s", exc)
             return []
         except Exception as exc:
@@ -285,7 +290,7 @@ class ExcelManager:
     def guardar_producto(self, producto: Producto) -> bool:
         """
         Guarda un nuevo producto en la hoja 'Menu'.
-        Si el producto tiene ID 0 (o un ID ya existente), se le asigna o valida
+        Si el producto tiene ID 0 (o un ID ya existente), se le asigna
         el ID incremental correspondiente.
 
         Args:
@@ -322,7 +327,7 @@ class ExcelManager:
             return True
 
         except PermissionError as exc:
-            self.ultimo_error = str(exc)
+            self.ultimo_error = self.MENSAJE_ARCHIVO_ABIERTO
             logger.error("PermissionError al guardar producto: %s", exc)
             return False
         except Exception as exc:
@@ -378,7 +383,7 @@ class ExcelManager:
             return True
 
         except PermissionError as exc:
-            self.ultimo_error = str(exc)
+            self.ultimo_error = self.MENSAJE_ARCHIVO_ABIERTO
             logger.error("PermissionError al actualizar producto: %s", exc)
             return False
         except Exception as exc:
@@ -430,7 +435,7 @@ class ExcelManager:
             return True
 
         except PermissionError as exc:
-            self.ultimo_error = str(exc)
+            self.ultimo_error = self.MENSAJE_ARCHIVO_ABIERTO
             logger.error("PermissionError al eliminar producto: %s", exc)
             return False
         except Exception as exc:
@@ -506,7 +511,7 @@ class ExcelManager:
             return afectados
 
         except PermissionError as exc:
-            self.ultimo_error = str(exc)
+            self.ultimo_error = self.MENSAJE_ARCHIVO_ABIERTO
             logger.error("PermissionError al actualizar precios masivamente: %s", exc)
             return 0
         except Exception as exc:
@@ -515,7 +520,7 @@ class ExcelManager:
             return 0
 
     # =========================================================================
-    # MÉTODOS OBLIGATORIOS DE GESTIÓN DE VENTAS Y CAJA (HOJA 'Ventas')
+    # MÉTODOS DE GESTIÓN DE VENTAS Y CAJA (HOJA 'Ventas')
     # =========================================================================
 
     def registrar_venta(self, venta: Venta) -> bool:
@@ -557,7 +562,7 @@ class ExcelManager:
             return True
 
         except PermissionError as exc:
-            self.ultimo_error = str(exc)
+            self.ultimo_error = self.MENSAJE_ARCHIVO_ABIERTO
             logger.error("PermissionError al registrar venta: %s", exc)
             return False
         except Exception as exc:
@@ -577,7 +582,11 @@ class ExcelManager:
             List[Venta]: Lista de ventas registradas en esa fecha.
         """
         self.ultimo_error = None
-        fecha_filtro = fecha.strip()[:10] if fecha and str(fecha).strip() else datetime.now().strftime("%Y-%m-%d")
+        fecha_filtro = (
+            fecha.strip()[:10]
+            if fecha and str(fecha).strip()
+            else datetime.now().strftime("%Y-%m-%d")
+        )
         ventas: List[Venta] = []
 
         try:
@@ -609,9 +618,7 @@ class ExcelManager:
             return ventas
 
         except PermissionError as exc:
-            self.ultimo_error = (
-                "No se pudo leer las ventas porque el archivo Excel está bloqueado."
-            )
+            self.ultimo_error = self.MENSAJE_ARCHIVO_ABIERTO
             logger.error("PermissionError al obtener ventas diarias: %s", exc)
             return []
         except Exception as exc:
@@ -620,8 +627,24 @@ class ExcelManager:
             return []
 
     # =========================================================================
-    # MÉTODOS AUXILIARES Y DE APOYO A LA INTERFAZ
+    # MÉTODOS ANALÍTICOS (PANDAS) Y APOYO A LA INTERFAZ
     # =========================================================================
+
+    def obtener_dataframe_menu(self) -> pd.DataFrame:
+        """Retorna el catálogo actual de productos como un DataFrame de Pandas."""
+        productos = self.obtener_productos()
+        if not productos:
+            return pd.DataFrame(columns=["id", "nombre", "categoria", "precio", "descripcion"])
+        return pd.DataFrame([p.to_dict() for p in productos])
+
+    def obtener_dataframe_ventas(self, fecha: str = "") -> pd.DataFrame:
+        """Retorna las ventas de la fecha indicada como un DataFrame de Pandas."""
+        ventas = self.obtener_ventas_diarias(fecha)
+        if not ventas:
+            return pd.DataFrame(
+                columns=["id", "fecha_hora", "detalle", "total", "medio_pago", "tipo_entrega"]
+            )
+        return pd.DataFrame([v.to_dict() for v in ventas])
 
     def obtener_categorias_existentes(self) -> List[str]:
         """Retorna la lista ordenada de categorías únicas presentes en el menú."""
@@ -632,23 +655,106 @@ class ExcelManager:
     def calcular_resumen_diario(self, fecha: str = "") -> Dict[str, Any]:
         """
         Calcula los totales recaudados en el día discriminados por medio de pago
-        y modalidad de entrega.
+        y modalidad de entrega empleando Pandas para agregación vectorial.
         """
-        ventas = self.obtener_ventas_diarias(fecha)
-        total_general = sum(v.total for v in ventas)
-        total_efectivo = sum(v.total for v in ventas if v.medio_pago == "Efectivo")
-        total_transferencia = sum(v.total for v in ventas if v.medio_pago == "Transferencia/MP")
-        cant_mostrador = sum(1 for v in ventas if v.tipo_entrega == "Mostrador")
-        cant_delivery = sum(1 for v in ventas if v.tipo_entrega == "Delivery")
+        df = self.obtener_dataframe_ventas(fecha)
+        if df.empty:
+            return {
+                "cantidad_ventas": 0,
+                "total_general": 0.0,
+                "total_efectivo": 0.0,
+                "total_transferencia": 0.0,
+                "cant_mostrador": 0,
+                "cant_delivery": 0,
+            }
+
+        total_general = float(df["total"].sum())
+        total_efectivo = float(df.loc[df["medio_pago"] == "Efectivo", "total"].sum())
+        total_transferencia = float(df.loc[df["medio_pago"] == "Transferencia/MP", "total"].sum())
+        cant_mostrador = int((df["tipo_entrega"] == "Mostrador").sum())
+        cant_delivery = int((df["tipo_entrega"] == "Delivery").sum())
 
         return {
-            "cantidad_ventas": len(ventas),
+            "cantidad_ventas": int(len(df)),
             "total_general": round(total_general, 2),
             "total_efectivo": round(total_efectivo, 2),
             "total_transferencia": round(total_transferencia, 2),
             "cant_mostrador": cant_mostrador,
             "cant_delivery": cant_delivery,
         }
+
+    def registrar_cierre_caja(self, fecha: str = "") -> bool:
+        """
+        Guarda un registro de Cierre de Caja / Arqueo Diario en la hoja 'Arqueos'
+        del archivo Excel de forma atómica.
+
+        Args:
+            fecha (str): Fecha operativa del arqueo ('YYYY-MM-DD').
+
+        Returns:
+            bool: True si el arqueo se guardó exitosamente en Excel, False en caso contrario.
+        """
+        self.ultimo_error = None
+        fecha_operativa = (
+            fecha.strip()[:10]
+            if fecha and str(fecha).strip()
+            else datetime.now().strftime("%Y-%m-%d")
+        )
+        resumen = self.calcular_resumen_diario(fecha_operativa)
+
+        try:
+            wb = self._cargar_workbook()
+            if self.HOJA_ARQUEOS not in wb.sheetnames:
+                ws_arq = wb.create_sheet(title=self.HOJA_ARQUEOS)
+                self._estilizar_hoja(
+                    ws_arq,
+                    self.ENCABEZADOS_ARQUEOS,
+                    [12, 22, 18, 16, 14, 14, 18, 22, 18],
+                )
+            else:
+                ws_arq = wb[self.HOJA_ARQUEOS]
+
+            ids_existentes: List[int] = []
+            for row in ws_arq.iter_rows(min_row=2, max_col=1, values_only=True):
+                if row and row[0] is not None and str(row[0]).strip() != "":
+                    try:
+                        ids_existentes.append(int(float(row[0])))
+                    except (ValueError, TypeError):
+                        pass
+
+            nuevo_id = (max(ids_existentes) + 1) if ids_existentes else 1
+            ahora_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            fila_arqueo = [
+                nuevo_id,
+                ahora_str,
+                fecha_operativa,
+                resumen["cantidad_ventas"],
+                resumen["cant_mostrador"],
+                resumen["cant_delivery"],
+                resumen["total_efectivo"],
+                resumen["total_transferencia"],
+                resumen["total_general"],
+            ]
+            ws_arq.append(fila_arqueo)
+            self._formatear_fila_datos(ws_arq, ws_arq.max_row, es_moneda_col=9)
+            for col_moneda in (7, 8, 9):
+                celda_m = ws_arq.cell(row=ws_arq.max_row, column=col_moneda)
+                celda_m.number_format = "$ #,##0.00"
+                celda_m.alignment = Alignment(horizontal="right", vertical="center")
+
+            self._guardar_workbook_atomico(wb)
+            wb.close()
+            return True
+
+        except PermissionError as exc:
+            self.ultimo_error = self.MENSAJE_ARCHIVO_ABIERTO
+            logger.error("PermissionError al registrar cierre de caja: %s", exc)
+            return False
+        except Exception as exc:
+            self.ultimo_error = f"Error al guardar el arqueo de caja en Excel: {exc}"
+            logger.error("Error al registrar cierre de caja: %s", exc)
+            return False
 
     def sembrar_datos_ejemplo_si_vacio(self) -> int:
         """
