@@ -30,3 +30,8 @@ output/*.jpg
 # Sistema operativo
 .DS_Store
 Thumbs.db
+
+build/
+dist/
+*.spec
+__pycache__/

@@ -1,0 +1,3 @@
+cd ~/Escritorio/gestion-gastronomica-flyers
+source .venv/bin/activate
+python3 main.py

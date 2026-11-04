@@ -1,7 +1,7 @@
 """
 Ventana principal de la aplicación de escritorio ('Centro de Control Diario').
-Coordina el encabezado institucional, el selector de modo visual y la navegación
-por pestañas mediante CTkTabview.
+Coordina el encabezado institucional, el selector de modo visual (Dark / Light / System),
+la paleta turquesa/esmeralda y la navegación por pestañas mediante CTkTabview.
 """
 
 from datetime import datetime
@@ -12,6 +12,7 @@ from services.flyer_generator import FlyerGenerator
 from views.tab_caja import TabCaja
 from views.tab_flyer import TabFlyer
 from views.tab_menu import TabMenu
+from views.theme_manager import ThemeManager
 
 
 class AppUI(ctk.CTk):
@@ -36,10 +37,19 @@ class AppUI(ctk.CTk):
 
         self.title("Centro de Control Diario — Gestión Gastronómica & Generador de Flyers")
         self.geometry("1240x760")
-        self.minsize(1060, 680)
+        self.minsize(1100, 680)
 
+        # Configuración fluida de la grilla principal
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(1, weight=1)
+        self.grid_rowconfigure(0, weight=0)  # Encabezado fijo
+        self.grid_rowconfigure(1, weight=1)  # Contenido fluido de pestañas
+        self.grid_rowconfigure(2, weight=0)  # Pie fijo
+
+        # Configurar color de fondo de la ventana principal
+        self.configure(fg_color=ThemeManager.BG_VENTANA)
+
+        # Aplicar estilo inicial a Treeviews
+        ThemeManager.aplicar_estilo_treeview("Dark")
 
         self._construir_encabezado()
         self._construir_navegacion_pestanas()
@@ -47,7 +57,12 @@ class AppUI(ctk.CTk):
 
     def _construir_encabezado(self) -> None:
         """Crea el encabezado institucional con título, fecha operativa y selector de tema."""
-        header = ctk.CTkFrame(self, corner_radius=0, height=64, fg_color="#0F172A")
+        header = ctk.CTkFrame(
+            self,
+            corner_radius=0,
+            height=64,
+            fg_color=ThemeManager.BG_HEADER,
+        )
         header.grid(row=0, column=0, sticky="ew")
         header.grid_columnconfigure(0, weight=1)
 
@@ -57,15 +72,15 @@ class AppUI(ctk.CTk):
         ctk.CTkLabel(
             bloque_titulo,
             text="🍽️  CENTRO DE CONTROL DIARIO  |  GESTIÓN GASTRONÓMICA",
-            font=ctk.CTkFont(size=18, weight="bold"),
+            font=ThemeManager.get_font(18, weight="bold"),
             text_color="#F8FAFC",
         ).pack(anchor="w")
 
         ctk.CTkLabel(
             bloque_titulo,
-            text="Administración de Menú en Excel • Automatización de Flyers 9:16 • Arqueo de Caja",
-            font=ctk.CTkFont(size=12),
-            text_color="#FBBF24",
+            text="Administración de Menú en Excel • Automatización de Flyers 9:16 • Arqueo de Caja y Pagos Mixtos",
+            font=ThemeManager.font_body(),
+            text_color="#2DD4BF",  # Turquesa brillante
         ).pack(anchor="w")
 
         # Selector de tema visual (Dark / Light / System) y fecha actual
@@ -75,36 +90,53 @@ class AppUI(ctk.CTk):
         fecha_hoy = datetime.now().strftime("%d/%m/%Y")
         ctk.CTkLabel(
             bloque_der,
-            text=f"📅 Fecha operativa: {fecha_hoy}",
-            font=ctk.CTkFont(size=12, weight="bold"),
+            text=f"📅 Fecha: {fecha_hoy}",
+            font=ThemeManager.font_body_bold(),
             text_color="#CBD5E1",
-        ).grid(row=0, column=0, padx=(0, 16))
+        ).grid(row=0, column=0, padx=(0, 14))
 
         ctk.CTkLabel(
             bloque_der,
             text="Tema:",
-            font=ctk.CTkFont(size=12),
+            font=ThemeManager.font_body(),
             text_color="#94A3B8",
         ).grid(row=0, column=1, padx=(0, 6))
 
         self.combo_tema = ctk.CTkOptionMenu(
             bloque_der,
-            values=["Dark", "System", "Light"],
+            values=["Dark", "Light", "System"],
             width=100,
             height=30,
+            font=ThemeManager.font_small_bold(),
+            fg_color=ThemeManager.COLOR_ACCENT,
+            button_color=ThemeManager.COLOR_ACCENT_HOVER,
             command=self._cambiar_modo_apariencia,
         )
         self.combo_tema.set("Dark")
         self.combo_tema.grid(row=0, column=2)
 
     def _construir_navegacion_pestanas(self) -> None:
-        """Inicializa el CTkTabview e instancia las vistas modulares de cada pestaña."""
-        self.tabview = ctk.CTkTabview(self, corner_radius=12)
-        self.tabview.grid(row=1, column=0, sticky="nsew", padx=16, pady=(6, 8))
+        """Inicializa el CTkTabview e instancia las vistas modulares de cada pestaña con títulos en 14px bold."""
+        self.tabview = ctk.CTkTabview(
+            self,
+            corner_radius=12,
+            fg_color=ThemeManager.BG_VENTANA,
+            segmented_button_selected_color=ThemeManager.COLOR_ACCENT[1],
+            segmented_button_selected_hover_color=ThemeManager.COLOR_ACCENT_HOVER[1],
+        )
+        self.tabview.grid(row=1, column=0, sticky="nsew", padx=14, pady=(4, 6))
 
-        nombre_tab_menu = "📋  1. Gestión de Menú y Precios"
-        nombre_tab_flyer = "🎨  2. Generador de Flyers (WhatsApp)"
-        nombre_tab_caja = "💰  3. Caja y Ventas Diarias"
+        # Personalizar tipografía de los botones de pestañas a 14px negrita
+        try:
+            self.tabview._segmented_button.configure(
+                font=ThemeManager.font_tab_title(),
+            )
+        except Exception:
+            pass
+
+        nombre_tab_menu = "📋  1. Menú y Precios"
+        nombre_tab_flyer = "🎨  2. Generador de Flyers (9:16)"
+        nombre_tab_caja = "💰  3. Caja y Arqueo Diario"
 
         tab_1 = self.tabview.add(nombre_tab_menu)
         tab_2 = self.tabview.add(nombre_tab_flyer)
@@ -137,21 +169,26 @@ class AppUI(ctk.CTk):
 
     def _construir_barra_estado(self) -> None:
         """Construye el pie institucional con información del archivo de persistencia."""
-        footer = ctk.CTkFrame(self, corner_radius=0, height=28, fg_color="#0F172A")
+        footer = ctk.CTkFrame(
+            self,
+            corner_radius=0,
+            height=28,
+            fg_color=ThemeManager.BG_FOOTER,
+        )
         footer.grid(row=2, column=0, sticky="ew")
         footer.grid_columnconfigure(0, weight=1)
 
         ctk.CTkLabel(
             footer,
-            text=f"Persistencia Local Activa: {self.excel_manager.filepath}",
-            font=ctk.CTkFont(size=11),
+            text=f"Persistencia Local: {self.excel_manager.filepath}",
+            font=ThemeManager.font_small(),
             text_color="#94A3B8",
         ).grid(row=0, column=0, sticky="w", padx=18, pady=3)
 
         ctk.CTkLabel(
             footer,
             text="Prácticas Profesionalizantes II • Tecnicatura Superior en Desarrollo de Software",
-            font=ctk.CTkFont(size=11),
+            font=ThemeManager.font_small(),
             text_color="#64748B",
         ).grid(row=0, column=1, sticky="e", padx=18, pady=3)
 
@@ -163,7 +200,10 @@ class AppUI(ctk.CTk):
         self.vista_flyer.refrescar_productos()
         self.vista_caja.refrescar_catalogo_productos()
 
-    @staticmethod
-    def _cambiar_modo_apariencia(nuevo_modo: str) -> None:
-        """Cambia dinámicamente entre modo Oscuro, Claro o del Sistema."""
+    def _cambiar_modo_apariencia(self, nuevo_modo: str) -> None:
+        """
+        Cambia dinámicamente entre modo Oscuro, Claro o del Sistema,
+        actualizando simultáneamente los estilos ttk de las tablas.
+        """
         ctk.set_appearance_mode(nuevo_modo)
+        ThemeManager.aplicar_estilo_treeview(nuevo_modo)

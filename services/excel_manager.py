@@ -37,14 +37,18 @@ class ExcelManager:
     HOJA_ARQUEOS: str = "Arqueos"
 
     ENCABEZADOS_MENU: List[str] = ["ID", "Nombre", "Categoria", "Precio", "Descripcion"]
+    ANCHOS_MENU: List[int] = [10, 32, 22, 16, 48]
     ENCABEZADOS_VENTAS: List[str] = [
         "ID",
         "Fecha_Hora",
         "Detalle",
         "Total",
         "Medio_Pago",
+        "Monto_Efectivo",
+        "Monto_Transferencia",
         "Tipo_Entrega",
     ]
+    ANCHOS_VENTAS: List[int] = [10, 22, 45, 16, 28, 18, 20, 18]
     ENCABEZADOS_ARQUEOS: List[str] = [
         "ID_Cierre",
         "Fecha_Hora_Cierre",
@@ -181,7 +185,7 @@ class ExcelManager:
                 self._estilizar_hoja(ws_menu, self.ENCABEZADOS_MENU, [10, 32, 22, 16, 48])
 
                 ws_ventas = wb.create_sheet(title=self.HOJA_VENTAS)
-                self._estilizar_hoja(ws_ventas, self.ENCABEZADOS_VENTAS, [10, 22, 45, 16, 20, 18])
+                self._estilizar_hoja(ws_ventas, self.ENCABEZADOS_VENTAS, self.ANCHOS_VENTAS)
 
                 self._guardar_workbook_atomico(wb)
                 wb.close()
@@ -197,8 +201,46 @@ class ExcelManager:
 
             if self.HOJA_VENTAS not in wb.sheetnames:
                 ws_ventas = wb.create_sheet(title=self.HOJA_VENTAS)
-                self._estilizar_hoja(ws_ventas, self.ENCABEZADOS_VENTAS, [10, 22, 45, 16, 20, 18])
+                self._estilizar_hoja(ws_ventas, self.ENCABEZADOS_VENTAS, self.ANCHOS_VENTAS)
                 modificado = True
+            else:
+                ws_ventas = wb[self.HOJA_VENTAS]
+                col_headers = [
+                    ws_ventas.cell(row=1, column=c).value
+                    for c in range(1, ws_ventas.max_column + 1)
+                ]
+                if "Monto_Efectivo" not in col_headers:
+                    filas_existentes = []
+                    for row in ws_ventas.iter_rows(min_row=2, values_only=True):
+                        if row and any(c is not None for c in row):
+                            filas_existentes.append(row)
+
+                    ws_ventas.delete_rows(1, ws_ventas.max_row)
+                    self._estilizar_hoja(ws_ventas, self.ENCABEZADOS_VENTAS, self.ANCHOS_VENTAS)
+                    for f in filas_existentes:
+                        id_v = f[0]
+                        fh = f[1]
+                        det = f[2]
+                        tot = f[3]
+                        mp = f[4] if len(f) > 4 and f[4] else "Efectivo"
+                        te = f[5] if len(f) > 5 and f[5] else "Mostrador"
+                        try:
+                            tot_f = float(tot) if tot is not None else 0.0
+                        except (ValueError, TypeError):
+                            tot_f = 0.0
+                        m_ef = tot_f if "efectivo" in str(mp).lower() else 0.0
+                        m_tr = (
+                            tot_f
+                            if ("transf" in str(mp).lower() or "mp" in str(mp).lower())
+                            else 0.0
+                        )
+                        ws_ventas.append([id_v, fh, det, tot, mp, m_ef, m_tr, te])
+                        self._formatear_fila_datos(ws_ventas, ws_ventas.max_row, es_moneda_col=4)
+                        for col_m in (6, 7):
+                            celda = ws_ventas.cell(row=ws_ventas.max_row, column=col_m)
+                            celda.number_format = "$ #,##0.00"
+                            celda.alignment = Alignment(horizontal="right", vertical="center")
+                    modificado = True
 
             if modificado:
                 self._guardar_workbook_atomico(wb)
@@ -556,6 +598,10 @@ class ExcelManager:
 
             ws.append(venta.to_excel_row())
             self._formatear_fila_datos(ws, ws.max_row, es_moneda_col=4)
+            for col_moneda in (6, 7):
+                celda_m = ws.cell(row=ws.max_row, column=col_moneda)
+                celda_m.number_format = "$ #,##0.00"
+                celda_m.alignment = Alignment(horizontal="right", vertical="center")
 
             self._guardar_workbook_atomico(wb)
             wb.close()
@@ -600,14 +646,27 @@ class ExcelManager:
                 if not row or all(celda is None or str(celda).strip() == "" for celda in row):
                     continue
                 try:
-                    venta = Venta(
-                        id=row[0],
-                        fecha_hora=row[1],
-                        detalle=row[2],
-                        total=row[3],
-                        medio_pago=row[4] if len(row) > 4 and row[4] else "Efectivo",
-                        tipo_entrega=row[5] if len(row) > 5 and row[5] else "Mostrador",
-                    )
+                    # Soporta formato nuevo (8 columnas con desglose) y formato previo (6 columnas)
+                    if len(row) >= 8:
+                        venta = Venta(
+                            id=row[0],
+                            fecha_hora=row[1],
+                            detalle=row[2],
+                            total=row[3],
+                            medio_pago=row[4] if row[4] else "Efectivo",
+                            monto_efectivo=row[5],
+                            monto_transferencia=row[6],
+                            tipo_entrega=row[7] if row[7] else "Mostrador",
+                        )
+                    else:
+                        venta = Venta(
+                            id=row[0],
+                            fecha_hora=row[1],
+                            detalle=row[2],
+                            total=row[3],
+                            medio_pago=row[4] if len(row) > 4 and row[4] else "Efectivo",
+                            tipo_entrega=row[5] if len(row) > 5 and row[5] else "Mostrador",
+                        )
                     if venta.fecha == fecha_filtro:
                         ventas.append(venta)
                 except (ValueError, TypeError) as err:
@@ -642,7 +701,16 @@ class ExcelManager:
         ventas = self.obtener_ventas_diarias(fecha)
         if not ventas:
             return pd.DataFrame(
-                columns=["id", "fecha_hora", "detalle", "total", "medio_pago", "tipo_entrega"]
+                columns=[
+                    "id",
+                    "fecha_hora",
+                    "detalle",
+                    "total",
+                    "medio_pago",
+                    "monto_efectivo",
+                    "monto_transferencia",
+                    "tipo_entrega",
+                ]
             )
         return pd.DataFrame([v.to_dict() for v in ventas])
 
@@ -655,7 +723,8 @@ class ExcelManager:
     def calcular_resumen_diario(self, fecha: str = "") -> Dict[str, Any]:
         """
         Calcula los totales recaudados en el día discriminados por medio de pago
-        y modalidad de entrega empleando Pandas para agregación vectorial.
+        (incluyendo desglose de ventas mixtas) y modalidad de entrega
+        empleando Pandas para agregación vectorial.
         """
         df = self.obtener_dataframe_ventas(fecha)
         if df.empty:
@@ -666,13 +735,16 @@ class ExcelManager:
                 "total_transferencia": 0.0,
                 "cant_mostrador": 0,
                 "cant_delivery": 0,
+                "cant_mixto": 0,
             }
 
         total_general = float(df["total"].sum())
-        total_efectivo = float(df.loc[df["medio_pago"] == "Efectivo", "total"].sum())
-        total_transferencia = float(df.loc[df["medio_pago"] == "Transferencia/MP", "total"].sum())
+        # El efectivo y transferencia consideran ventas puras y la porción correspondiente de ventas mixtas
+        total_efectivo = float(df["monto_efectivo"].sum())
+        total_transferencia = float(df["monto_transferencia"].sum())
         cant_mostrador = int((df["tipo_entrega"] == "Mostrador").sum())
         cant_delivery = int((df["tipo_entrega"] == "Delivery").sum())
+        cant_mixto = int((df["medio_pago"] == Venta.MEDIO_MIXTO).sum())
 
         return {
             "cantidad_ventas": int(len(df)),
@@ -681,6 +753,7 @@ class ExcelManager:
             "total_transferencia": round(total_transferencia, 2),
             "cant_mostrador": cant_mostrador,
             "cant_delivery": cant_delivery,
+            "cant_mixto": cant_mixto,
         }
 
     def registrar_cierre_caja(self, fecha: str = "") -> bool:
@@ -756,65 +829,324 @@ class ExcelManager:
             logger.error("Error al registrar cierre de caja: %s", exc)
             return False
 
-    def sembrar_datos_ejemplo_si_vacio(self) -> int:
+    CATALOGO_SEMILLA_ROTISERIA: List[Dict[str, Any]] = [
+        # --- PIZZAS (6) ---
+        {
+            "nombre": "Pizza Muzzarella Clásica",
+            "categoria": "Pizzas",
+            "precio": 10500.0,
+            "descripcion": "Salsa artesanal de tomates, abundante muzzarella de primera calidad, orégano y aceitunas verdes.",
+        },
+        {
+            "nombre": "Pizza Fugazzeta Rellena",
+            "categoria": "Pizzas",
+            "precio": 13000.0,
+            "descripcion": "Doble masa rellena con jamón cocido y queso fundido, cubierta con cebollas caramelizadas al oliva.",
+        },
+        {
+            "nombre": "Pizza Especial (Jamón y Morrones)",
+            "categoria": "Pizzas",
+            "precio": 11500.0,
+            "descripcion": "Muzzarella, jamón cocido seleccionado, morrones asados dulces y aceitunas descarozadas.",
+        },
+        {
+            "nombre": "Pizza Napolitana con Ajo",
+            "categoria": "Pizzas",
+            "precio": 11800.0,
+            "descripcion": "Muzzarella, rodajas finas de tomate natural, provenzal fresca con ajo suave y aceitunas negras.",
+        },
+        {
+            "nombre": "Pizza Calabresa Picantita",
+            "categoria": "Pizzas",
+            "precio": 12200.0,
+            "descripcion": "Muzzarella, longaniza artesanal estacionada en rodajas, ají molido y aceite de oliva.",
+        },
+        {
+            "nombre": "Pizza Cuatro Quesos",
+            "categoria": "Pizzas",
+            "precio": 13500.0,
+            "descripcion": "Muzzarella, queso azul patagónico, provolone curado y parmesano gratinado al horno.",
+        },
+        # --- EMPANADAS (6) ---
+        {
+            "nombre": "Docena Carne Suave Tradicional",
+            "categoria": "Empanadas",
+            "precio": 13500.0,
+            "descripcion": "Carne picada de ternera, cebolla rehogada, huevo duro y especias criollas al horno.",
+        },
+        {
+            "nombre": "Docena Jamón y Queso",
+            "categoria": "Empanadas",
+            "precio": 13500.0,
+            "descripcion": "Abundante jamón cocido en cubos y muzzarella cremosa de fundido suave.",
+        },
+        {
+            "nombre": "Docena Pollo al Verdeo",
+            "categoria": "Empanadas",
+            "precio": 13800.0,
+            "descripcion": "Pechuga desmenuzada marinada con crema suave de cebollas de verdeo y vino blanco.",
+        },
+        {
+            "nombre": "Docena Carne Cortada a Cuchillo",
+            "categoria": "Empanadas",
+            "precio": 14200.0,
+            "descripcion": "Lomo tierno cortado a cuchillo con cebolla de verdeo, pimentón dulce y comino.",
+        },
+        {
+            "nombre": "Docena Humita Cremosa del Norte",
+            "categoria": "Empanadas",
+            "precio": 13000.0,
+            "descripcion": "Maíz dulce amarillo cremoso con queso mantecoso y toque de nuez moscada.",
+        },
+        {
+            "nombre": "Docena Acelga y Ricota al Horno",
+            "categoria": "Empanadas",
+            "precio": 12800.0,
+            "descripcion": "Acelga fresca de quinta salteada con ricota casera y queso sardo rallado.",
+        },
+        # --- HAMBURGUESAS (4) ---
+        {
+            "nombre": "Promo 2 Burgers Doble Cheddar + Papas",
+            "categoria": "Hamburguesas",
+            "precio": 16500.0,
+            "descripcion": "2 hamburguesas con doble medallón de 220g en pan brioche, 4 fetas cheddar, panceta crocante y papas.",
+        },
+        {
+            "nombre": "Burger Bacon Crispy & BBQ",
+            "categoria": "Hamburguesas",
+            "precio": 11500.0,
+            "descripcion": "Medallón casero de 180g, doble panceta crocante, cebolla crispy y salsa barbacoa ahumada.",
+        },
+        {
+            "nombre": "Burger Blue Cheese & Malbec",
+            "categoria": "Hamburguesas",
+            "precio": 12000.0,
+            "descripcion": "Medallón 180g, queso azul fundido, cebollas caramelizadas al malbec y rúcula fresca.",
+        },
+        {
+            "nombre": "Burger Clásica Completa c/ Fritas",
+            "categoria": "Hamburguesas",
+            "precio": 9800.0,
+            "descripcion": "Medallón de ternera 150g, jamón, queso, huevo a la plancha, lechuga, tomate y papas fritas.",
+        },
+        # --- SÁNDWICHES Y LOMITOS (4) ---
+        {
+            "nombre": "Sándwich de Milanesa Completo",
+            "categoria": "Sándwiches y Lomitos",
+            "precio": 12000.0,
+            "descripcion": "Milanesa de ternera XL en pan francés crocante con jamón, queso, huevo frito, lechuga y tomate.",
+        },
+        {
+            "nombre": "Lomito Completo Especial",
+            "categoria": "Sándwiches y Lomitos",
+            "precio": 14500.0,
+            "descripcion": "Bife de lomo tiernizado a la plancha con jamón cocido, queso, huevo frito y papas fritas.",
+        },
+        {
+            "nombre": "Tostado Carlitos Especial",
+            "categoria": "Sándwiches y Lomitos",
+            "precio": 8500.0,
+            "descripcion": "Pan de miga triple tostado con manteca dorada, doble jamón, queso derretido y salsa tártara.",
+        },
+        {
+            "nombre": "Sándwich de Bondiola Braseada",
+            "categoria": "Sándwiches y Lomitos",
+            "precio": 13200.0,
+            "descripcion": "Bondiola desmenuzada cocinada a fuego lento con barbacoa y ensalada coleslaw en pan de papa.",
+        },
+        # --- MINUTAS Y AL PLATO (6) ---
+        {
+            "nombre": "Milanesa a la Napolitana c/ Fritas",
+            "categoria": "Minutas y Al Plato",
+            "precio": 15900.0,
+            "descripcion": "Milanesa de ternera gigante con salsa fileto casera, jamón cocido, muzzarella gratinada y papas fritas.",
+        },
+        {
+            "nombre": "Suprema Suiza con Puré Mixto",
+            "categoria": "Minutas y Al Plato",
+            "precio": 14800.0,
+            "descripcion": "Pechuga de pollo gratinada con salsa bechamel, queso provolone fundido y puré de papas y calabaza.",
+        },
+        {
+            "nombre": "Tortilla de Papas y Cebolla Babé",
+            "categoria": "Minutas y Al Plato",
+            "precio": 9200.0,
+            "descripcion": "Tortilla española clásica con papas doradas, cebollas caramelizadas y centro cremoso jugoso.",
+        },
+        {
+            "nombre": "Matambre a la Pizza con Papas Cuña",
+            "categoria": "Minutas y Al Plato",
+            "precio": 17500.0,
+            "descripcion": "Matambre vacuno tiernizado al horno con salsa de tomate, muzzarella derretida y orégano.",
+        },
+        {
+            "nombre": "Bife de Chorizo a Caballo c/ Fritas",
+            "categoria": "Minutas y Al Plato",
+            "precio": 18500.0,
+            "descripcion": "Corte premium de 400g a la chapa coronado con dos huevos fritos y guarnición de fritas.",
+        },
+        {
+            "nombre": "Porción de Rabas a la Romana",
+            "categoria": "Minutas y Al Plato",
+            "precio": 14000.0,
+            "descripcion": "Aros de calamar crocantes rebozados en harina y pimentón, servidos con limón y salsa tártara.",
+        },
+        # --- POLLO AL SPIEDO Y PARRILLA (3) ---
+        {
+            "nombre": "Pollo al Spiedo Entero con Papas",
+            "categoria": "Pollo al Spiedo y Parrilla",
+            "precio": 18200.0,
+            "descripcion": "Pollo asado al spiedo dorado y jugoso con chimichurri casero, limón y bandeja familiar de papas.",
+        },
+        {
+            "nombre": "Medio Pollo al Spiedo c/ Ensalada Rusa",
+            "categoria": "Pollo al Spiedo y Parrilla",
+            "precio": 10500.0,
+            "descripcion": "Medio pollo dorado al spiedo acompañado de ensalada rusa artesanal con mayonesa suave.",
+        },
+        {
+            "nombre": "Asado de Tira al Horno con Papas",
+            "categoria": "Pollo al Spiedo y Parrilla",
+            "precio": 19000.0,
+            "descripcion": "Costillar vacuno tiernizado a baja temperatura con papas rústicas al romero y sal marina.",
+        },
+        # --- TARTAS Y CALZONES (2) ---
+        {
+            "nombre": "Tarta Pascualina de Acelga y Huevo",
+            "categoria": "Tartas y Calzones",
+            "precio": 8900.0,
+            "descripcion": "Masa hojaldrada casera rellena con acelga salteada, queso cremoso y huevos enteros al horno.",
+        },
+        {
+            "nombre": "Calzone Napolitano Gigante",
+            "categoria": "Tartas y Calzones",
+            "precio": 12800.0,
+            "descripcion": "Masa de pizza doblada rellena con jamón cocido, ricota, muzzarella, tomates frescos y albahaca.",
+        },
+        # --- GUARNICIONES (4) ---
+        {
+            "nombre": "Porción de Papas Fritas Cheddar y Bacon",
+            "categoria": "Guarniciones",
+            "precio": 7500.0,
+            "descripcion": "Papas bastón crujientes con abundante salsa cheddar fundida, panceta crocante y ciboulette.",
+        },
+        {
+            "nombre": "Papas Fritas Tradicionales en Cono XL",
+            "categoria": "Guarniciones",
+            "precio": 5500.0,
+            "descripcion": "Bandeja grande de papas fritas clásicas recién hechas, crocantes por fuera y tiernas por dentro.",
+        },
+        {
+            "nombre": "Ensalada Mixta Familiar",
+            "categoria": "Guarniciones",
+            "precio": 4800.0,
+            "descripcion": "Lechuga capuchina crujiente, tomates redondos maduros y cebolla morada fresca con oliva.",
+        },
+        {
+            "nombre": "Puré de Papas Casero a la Manteca",
+            "categoria": "Guarniciones",
+            "precio": 4500.0,
+            "descripcion": "Papas seleccionadas pisadas a mano con crema de leche fresca, manteca y nuez moscada.",
+        },
+        # --- BEBIDAS (5) ---
+        {
+            "nombre": "Gaseosa 1.5L Línea Coca-Cola",
+            "categoria": "Bebidas",
+            "precio": 3500.0,
+            "descripcion": "Botella de 1.5 litros bien fría (Coca-Cola, Coca Zero, Sprite o Fanta).",
+        },
+        {
+            "nombre": "Cerveza Quilmes Clásica 1L",
+            "categoria": "Bebidas",
+            "precio": 4200.0,
+            "descripcion": "Cerveza rubia tradicional argentina en botella de vidrio retornable de 1 litro helada.",
+        },
+        {
+            "nombre": "Cerveza IPA Artesanal 500ml",
+            "categoria": "Bebidas",
+            "precio": 4800.0,
+            "descripcion": "Cerveza artesanal de alta graduación lupulada con notas cítricas en lata de medio litro.",
+        },
+        {
+            "nombre": "Agua Mineral sin Gas 500ml",
+            "categoria": "Bebidas",
+            "precio": 2000.0,
+            "descripcion": "Agua pura de manantial embotellada de origen en presentación individual fresca.",
+        },
+        {
+            "nombre": "Vino Malbec Selección 750ml",
+            "categoria": "Bebidas",
+            "precio": 6500.0,
+            "descripcion": "Vino tinto varietal mendocino con paso por roble, ideal para acompañar carnes y empanadas.",
+        },
+        # --- POSTRES (2) ---
+        {
+            "nombre": "Flan Casero Mixto (Dulce y Crema)",
+            "categoria": "Postres",
+            "precio": 4500.0,
+            "descripcion": "Flan tradicional de 8 huevos bañado en caramelo con dulce de leche repostero y crema chantilly.",
+        },
+        {
+            "nombre": "Tiramisú Artesanal Italiano",
+            "categoria": "Postres",
+            "precio": 5200.0,
+            "descripcion": "Capas de vainillas embebidas en café espresso y licor amaretto con suave crema mascarpone.",
+        },
+    ]
+
+    def sembrar_datos_ejemplo_si_vacio(self, forzar: bool = False) -> int:
         """
-        Carga un conjunto inicial de platos típicos de rotisería si la hoja 'Menu'
-        se encuentra vacía, facilitando la prueba inmediata del sistema por QA.
+        Carga el catálogo completo de demostración gastronómica (42 platos y bebidas)
+        si la hoja 'Menu' tiene menos de 15 productos o si forzar=True.
 
         Returns:
-            int: Cantidad de productos iniciales insertados.
+            int: Cantidad de productos guardados en el menú.
         """
         productos_actuales = self.obtener_productos()
-        if productos_actuales:
+        if productos_actuales and len(productos_actuales) >= 15 and not forzar:
             return 0
 
-        productos_semilla = [
-            Producto(
-                id=1,
-                nombre="Pizza Napolitana Especial (8 Porc.)",
-                categoria="Pizzas",
-                precio=11500.0,
-                descripcion="Salsa casera, abundante muzzarella, jamón cocido, rodajas de tomate fresco, ajo y aceitunas.",
-            ),
-            Producto(
-                id=2,
-                nombre="Docena de Empanadas Surtidas",
-                categoria="Empanadas",
-                precio=13800.0,
-                descripcion="Carne cortada a cuchillo, pollo, jamón y queso o humita. Al horno o fritas a elección.",
-            ),
-            Producto(
-                id=3,
-                nombre="Milanesa a la Napolitana c/ Fritas (Para 2)",
-                categoria="Minutas y Al Plato",
-                precio=15900.0,
-                descripcion="Milanesa de ternera XL con salsa fileto, jamón, muzzarella gratinada y porción grande de papas.",
-            ),
-            Producto(
-                id=4,
-                nombre="Promo 2 Burgers Doble Cheddar + Papas",
-                categoria="Combos",
-                precio=16500.0,
-                descripcion="2 Hamburguesas dobles de 220g en pan de papa con cuádruple cheddar, panceta crocante y fritas.",
-            ),
-            Producto(
-                id=5,
-                nombre="Pollo al Spiedo Entero con Papas Fritas",
-                categoria="Pollo al Spiedo y Parrilla",
-                precio=18200.0,
-                descripcion="Pollo dorado al spiedo con chimichurri casero, limón y bandeja familiar de papas fritas.",
-            ),
-            Producto(
-                id=6,
-                nombre="Sándwich de Lomito Completo con Fritas",
-                categoria="Sándwiches y Lomitos",
-                precio=12400.0,
-                descripcion="Bife de lomo tiernizado en pan francés tostado con jamón, queso, huevo a la plancha, lechuga y tomate.",
-            ),
-        ]
-
+        # Si se fuerza o hay pocos productos, sembrar el catálogo completo
         insertados = 0
-        for prod in productos_semilla:
+        id_actual = 1
+        for datos in self.CATALOGO_SEMILLA_ROTISERIA:
+            prod = Producto(
+                id=id_actual,
+                nombre=datos["nombre"],
+                categoria=datos["categoria"],
+                precio=datos["precio"],
+                descripcion=datos["descripcion"],
+            )
             if self.guardar_producto(prod):
                 insertados += 1
+                id_actual += 1
+
+        logger.info(
+            "Catálogo gastronómico de demostración sembrado con éxito: %d productos.",
+            insertados,
+        )
         return insertados
+
+    def poblar_catalogo_demostracion(self) -> int:
+        """
+        Sobrescribe o regenera la hoja 'Menu' con los 42 productos de muestra
+        y asegura el guardado atómico en el archivo Excel.
+        """
+        wb = self._cargar_workbook()
+        if self.HOJA_MENU in wb.sheetnames:
+            del wb[self.HOJA_MENU]
+        ws_menu = wb.create_sheet(title=self.HOJA_MENU, index=0)
+        self._estilizar_hoja(ws_menu, self.ENCABEZADOS_MENU, self.ANCHOS_MENU)
+
+        for idx, datos in enumerate(self.CATALOGO_SEMILLA_ROTISERIA, start=1):
+            fila = idx + 1
+            ws_menu.cell(row=fila, column=1, value=idx)
+            ws_menu.cell(row=fila, column=2, value=datos["nombre"])
+            ws_menu.cell(row=fila, column=3, value=datos["categoria"])
+            ws_menu.cell(row=fila, column=4, value=float(datos["precio"]))
+            ws_menu.cell(row=fila, column=5, value=datos["descripcion"])
+            ws_menu.cell(row=fila, column=6, value=datos.get("stock", 0))
+            self._formatear_fila_datos(ws_menu, fila, es_moneda_col=4)
+
+        self._guardar_workbook_atomico(wb)
+        return len(self.CATALOGO_SEMILLA_ROTISERIA)

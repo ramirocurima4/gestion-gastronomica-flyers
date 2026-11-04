@@ -1,7 +1,8 @@
 """
 Módulo de modelo de dominio para Ventas y Arqueo de Caja Diario.
 Implementa encapsulamiento POO mediante propiedades (@property / @setter),
-validaciones de medios de pago, modalidades de entrega y montos positivos.
+validaciones de medios de pago (incluyendo Pago Mixto Efectivo + Transferencia),
+modalidades de entrega y montos positivos.
 """
 
 from datetime import datetime
@@ -18,11 +19,21 @@ class Venta:
         fecha_hora (str): Fecha y hora en formato ISO legible ('YYYY-MM-DD HH:MM:SS').
         detalle (Union[str, List[str]]): Descripción o lista de ítems vendidos (no vacío).
         total (float): Monto total cobrado en pesos (estrictamente > 0).
-        medio_pago (str): Medio de cobro ('Efectivo' o 'Transferencia/MP').
+        medio_pago (str): Medio de cobro ('Efectivo', 'Transferencia/MP' o 'Mixto (Efectivo + Transferencia)').
+        monto_efectivo (float): Porción cobrada en efectivo (>= 0).
+        monto_transferencia (float): Porción cobrada por transferencia/MP (>= 0).
         tipo_entrega (str): Modalidad de entrega ('Mostrador' o 'Delivery').
     """
 
-    MEDIOS_PAGO_VALIDOS: Tuple[str, ...] = ("Efectivo", "Transferencia/MP")
+    MEDIO_EFECTIVO: str = "Efectivo"
+    MEDIO_TRANSFERENCIA: str = "Transferencia/MP"
+    MEDIO_MIXTO: str = "Mixto (Efectivo + Transferencia)"
+
+    MEDIOS_PAGO_VALIDOS: Tuple[str, ...] = (
+        MEDIO_EFECTIVO,
+        MEDIO_TRANSFERENCIA,
+        MEDIO_MIXTO,
+    )
     TIPOS_ENTREGA_VALIDOS: Tuple[str, ...] = ("Mostrador", "Delivery")
 
     def __init__(
@@ -33,12 +44,16 @@ class Venta:
         medio_pago: str = "Efectivo",
         tipo_entrega: str = "Mostrador",
         fecha_hora: Optional[str] = None,
+        monto_efectivo: Optional[float] = None,
+        monto_transferencia: Optional[float] = None,
     ) -> None:
         self._id: int = 0
         self._fecha_hora: str = ""
         self._detalle: Union[str, List[str]] = ""
         self._total: float = 0.0
-        self._medio_pago: str = "Efectivo"
+        self._medio_pago: str = self.MEDIO_EFECTIVO
+        self._monto_efectivo: float = 0.0
+        self._monto_transferencia: float = 0.0
         self._tipo_entrega: str = "Mostrador"
 
         # Asignación a través de setters con validación defensiva
@@ -46,8 +61,14 @@ class Venta:
         self.fecha_hora = fecha_hora  # type: ignore[assignment]
         self.detalle = detalle
         self.total = total
-        self.medio_pago = medio_pago
         self.tipo_entrega = tipo_entrega
+
+        # Asignar medio de pago y desgloses
+        self.establecer_medio_pago_y_desglose(
+            medio_pago=medio_pago,
+            monto_efectivo=monto_efectivo,
+            monto_transferencia=monto_transferencia,
+        )
 
     # =========================================================================
     # PROPIEDADES Y SETTERS (ENCAPSULAMIENTO POO)
@@ -98,10 +119,15 @@ class Venta:
         """Retorna el medio de pago utilizado."""
         return self._medio_pago
 
-    @medio_pago.setter
-    def medio_pago(self, valor: Any) -> None:
-        """Valida que el medio de pago sea 'Efectivo' o 'Transferencia/MP'."""
-        self._medio_pago = self._validar_medio_pago(valor)
+    @property
+    def monto_efectivo(self) -> float:
+        """Retorna el monto abonado en efectivo."""
+        return self._monto_efectivo
+
+    @property
+    def monto_transferencia(self) -> float:
+        """Retorna el monto abonado mediante transferencia o Mercado Pago."""
+        return self._monto_transferencia
 
     @property
     def tipo_entrega(self) -> str:
@@ -114,7 +140,109 @@ class Venta:
         self._tipo_entrega = self._validar_tipo_entrega(valor)
 
     # =========================================================================
-    # MÉTODOS DE VALIDACIÓN DEFENSIVA
+    # GESTIÓN Y VALIDACIÓN DE PAGO Y DESGLOSE MIXTO
+    # =========================================================================
+
+    def establecer_medio_pago_y_desglose(
+        self,
+        medio_pago: Any,
+        monto_efectivo: Optional[Any] = None,
+        monto_transferencia: Optional[Any] = None,
+    ) -> None:
+        """
+        Configura el medio de pago validando defensivamente el desglose en efectivo
+        y transferencia. Si el pago es 'Mixto (Efectivo + Transferencia)', verifica
+        estrictamente que la suma de ambas partes coincida con el total de la venta.
+        """
+        normalizado = self._validar_medio_pago(medio_pago)
+        self._medio_pago = normalizado
+
+        if normalizado == self.MEDIO_EFECTIVO:
+            self._monto_efectivo = self._total
+            self._monto_transferencia = 0.0
+        elif normalizado == self.MEDIO_TRANSFERENCIA:
+            self._monto_efectivo = 0.0
+            self._monto_transferencia = self._total
+        else:  # MEDIO_MIXTO
+            efectivo_val = (
+                self._limpiar_numero_positivo_o_cero(monto_efectivo, "Monto Efectivo")
+                if monto_efectivo is not None
+                else 0.0
+            )
+            transf_val = (
+                self._limpiar_numero_positivo_o_cero(monto_transferencia, "Monto Transferencia")
+                if monto_transferencia is not None
+                else 0.0
+            )
+
+            # Validar que la suma coincida con el total de la venta (tolerancia a float de 1 centavo)
+            suma = round(efectivo_val + transf_val, 2)
+            if abs(suma - self._total) > 0.01:
+                raise ValueError(
+                    f"En pago Mixto, la suma de Efectivo (${efectivo_val:,.0f}) y "
+                    f"Transferencia (${transf_val:,.0f}) es ${suma:,.0f}, y debe coincidir "
+                    f"exactamente con el Total Cobrado (${self._total:,.0f})."
+                )
+
+            self._monto_efectivo = round(efectivo_val, 2)
+            self._monto_transferencia = round(transf_val, 2)
+
+    @classmethod
+    def _validar_medio_pago(cls, valor: Any) -> str:
+        """Valida que el medio de pago sea uno de los permitidos por el negocio."""
+        if valor is None:
+            raise ValueError("El medio de pago es obligatorio.")
+        texto = str(valor).strip()
+        mapa = {
+            "efectivo": cls.MEDIO_EFECTIVO,
+            "transferencia/mp": cls.MEDIO_TRANSFERENCIA,
+            "transferencia": cls.MEDIO_TRANSFERENCIA,
+            "mercado pago": cls.MEDIO_TRANSFERENCIA,
+            "mercadopago": cls.MEDIO_TRANSFERENCIA,
+            "mp": cls.MEDIO_TRANSFERENCIA,
+            "mixto": cls.MEDIO_MIXTO,
+            "mixto (efectivo + transferencia)": cls.MEDIO_MIXTO,
+            "mixto (efectivo + mp)": cls.MEDIO_MIXTO,
+            "mixto (efectivo/transferencia)": cls.MEDIO_MIXTO,
+            "efectivo + transferencia": cls.MEDIO_MIXTO,
+            "efectivo y transferencia": cls.MEDIO_MIXTO,
+        }
+        normalizado = mapa.get(texto.lower(), texto)
+        if normalizado not in cls.MEDIOS_PAGO_VALIDOS:
+            raise ValueError(
+                f"Medio de pago inválido: '{texto}'. "
+                f"Valores permitidos: {', '.join(cls.MEDIOS_PAGO_VALIDOS)}."
+            )
+        return normalizado
+
+    @staticmethod
+    def _limpiar_numero_positivo_o_cero(valor: Any, nombre_campo: str) -> float:
+        """Valida que un valor numérico sea mayor o igual a cero."""
+        if isinstance(valor, bool) or valor is None:
+            raise TypeError(f"El campo '{nombre_campo}' debe ser numérico.")
+        if isinstance(valor, str):
+            limpio = valor.replace("$", "").replace(" ", "").strip()
+            if "," in limpio and "." in limpio:
+                if limpio.rfind(",") > limpio.rfind("."):
+                    limpio = limpio.replace(".", "").replace(",", ".")
+                else:
+                    limpio = limpio.replace(",", "")
+            elif "," in limpio:
+                limpio = limpio.replace(",", ".")
+            valor = limpio
+        try:
+            num_float = float(valor)
+        except (ValueError, TypeError) as exc:
+            raise ValueError(f"'{nombre_campo}' debe ser un número válido. Recibido: {valor!r}") from exc
+
+        if math.isnan(num_float) or math.isinf(num_float):
+            raise ValueError(f"'{nombre_campo}' no puede ser NaN ni infinito.")
+        if num_float < 0:
+            raise ValueError(f"'{nombre_campo}' no puede ser negativo.")
+        return round(num_float, 2)
+
+    # =========================================================================
+    # MÉTODOS DE VALIDACIÓN DEFENSIVA ADICIONALES
     # =========================================================================
 
     @staticmethod
@@ -196,28 +324,6 @@ class Venta:
         return round(total_float, 2)
 
     @classmethod
-    def _validar_medio_pago(cls, valor: Any) -> str:
-        """Valida que el medio de pago sea uno de los permitidos por el negocio."""
-        if valor is None:
-            raise ValueError("El medio de pago es obligatorio.")
-        texto = str(valor).strip()
-        mapa = {
-            "efectivo": "Efectivo",
-            "transferencia/mp": "Transferencia/MP",
-            "transferencia": "Transferencia/MP",
-            "mercado pago": "Transferencia/MP",
-            "mercadopago": "Transferencia/MP",
-            "mp": "Transferencia/MP",
-        }
-        normalizado = mapa.get(texto.lower(), texto)
-        if normalizado not in cls.MEDIOS_PAGO_VALIDOS:
-            raise ValueError(
-                f"Medio de pago inválido: '{texto}'. "
-                f"Valores permitidos: {', '.join(cls.MEDIOS_PAGO_VALIDOS)}."
-            )
-        return normalizado
-
-    @classmethod
     def _validar_tipo_entrega(cls, valor: Any) -> str:
         """Valida que el tipo de entrega sea 'Mostrador' o 'Delivery'."""
         if valor is None:
@@ -264,6 +370,16 @@ class Venta:
         """Retorna el total formateado en pesos argentinos ($ {:,.0f})."""
         return f"$ {self._total:,.0f}"
 
+    @property
+    def medio_pago_resumen(self) -> str:
+        """
+        Retorna una etiqueta concisa del medio de pago con desglose
+        si la venta fue mixta (ej. 'Mixto (Ef: $10.000 / Tr: $5.000)').
+        """
+        if self._medio_pago == self.MEDIO_MIXTO:
+            return f"Mixto (Ef: ${self._monto_efectivo:,.0f} | Tr: ${self._monto_transferencia:,.0f})"
+        return self._medio_pago
+
     def to_dict(self) -> Dict[str, Any]:
         """Serializa la instancia de Venta a un diccionario estándar."""
         return {
@@ -272,23 +388,33 @@ class Venta:
             "detalle": self.detalle_texto,
             "total": self._total,
             "medio_pago": self._medio_pago,
+            "monto_efectivo": self._monto_efectivo,
+            "monto_transferencia": self._monto_transferencia,
             "tipo_entrega": self._tipo_entrega,
         }
 
     def to_excel_row(self) -> List[Any]:
-        """Retorna una lista ordenada para insertar como fila en la hoja 'Ventas' de Excel."""
+        """
+        Retorna una lista ordenada para insertar como fila en la hoja 'Ventas' de Excel:
+        [ID, Fecha_Hora, Detalle, Total, Medio_Pago, Monto_Efectivo, Monto_Transferencia, Tipo_Entrega].
+        """
         return [
             self._id,
             self._fecha_hora,
             self.detalle_texto,
             self._total,
             self._medio_pago,
+            self._monto_efectivo,
+            self._monto_transferencia,
             self._tipo_entrega,
         ]
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Venta":
-        """Construye una instancia de Venta desde un diccionario (ej. fila de Excel/Pandas)."""
+        """
+        Construye una instancia de Venta desde un diccionario (ej. fila de Excel/Pandas).
+        Mantiene retrocompatibilidad con esquemas anteriores sin desglose explícito.
+        """
         if not isinstance(data, dict):
             raise TypeError("Se esperaba un diccionario para deserializar una Venta.")
 
@@ -299,10 +425,19 @@ class Venta:
         detalle_val = data.get("detalle", data.get("Detalle", ""))
         total_val = data.get("total", data.get("Total", 0.0))
         medio_pago_val = data.get(
-            "medio_pago", data.get("Medio_Pago", data.get("Medio de Pago", "Efectivo"))
+            "medio_pago", data.get("Medio_Pago", data.get("Medio de Pago", cls.MEDIO_EFECTIVO))
         )
         tipo_entrega_val = data.get(
             "tipo_entrega", data.get("Tipo_Entrega", data.get("Tipo de Entrega", "Mostrador"))
+        )
+
+        monto_efectivo_val = data.get(
+            "monto_efectivo",
+            data.get("Monto_Efectivo", data.get("Monto Efectivo", None)),
+        )
+        monto_transferencia_val = data.get(
+            "monto_transferencia",
+            data.get("Monto_Transferencia", data.get("Monto Transferencia", None)),
         )
 
         return cls(
@@ -312,11 +447,15 @@ class Venta:
             total=total_val,
             medio_pago=medio_pago_val,
             tipo_entrega=tipo_entrega_val,
+            monto_efectivo=monto_efectivo_val,
+            monto_transferencia=monto_transferencia_val,
         )
 
     def __repr__(self) -> str:
         return (
             f"Venta(id={self._id}, fecha_hora={self._fecha_hora!r}, "
             f"detalle={self.detalle_texto!r}, total={self._total}, "
-            f"medio_pago={self._medio_pago!r}, tipo_entrega={self._tipo_entrega!r})"
+            f"medio_pago={self._medio_pago!r}, "
+            f"efectivo={self._monto_efectivo}, transf={self._monto_transferencia}, "
+            f"tipo_entrega={self._tipo_entrega!r})"
         )

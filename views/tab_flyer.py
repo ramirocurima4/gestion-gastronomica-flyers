@@ -1,15 +1,18 @@
 """
 Vista de la pestaña 'Generador Gráfico de Flyers' (Módulo 2 / 3).
-Permite seleccionar hasta 6 productos del menú, personalizar plantilla/título/WhatsApp,
-previsualizar en vivo en formato vertical escalado (9:16) manteniendo la referencia
-fija de CTkImage en memoria y exportar el flyer en alta calidad (1080x1920 px).
+Soporta dos modos de generación gráfica:
+1. 'Modo Promos Destacadas': 1 a 6 tarjetas grandes con descripción y precio destacado.
+2. 'Modo Menú Completo': Exporta la carta entera clasificada automáticamente por categorías
+   en un layout de 2 columnas verticales con encabezados en turquesa y renglones compactos.
+Permite elegir entre 3 plantillas programáticas ('Pizarra Oscura', 'Turquesa Gourmet',
+'Rojo Rústico') o cargar imagen propia, previsualizando en vivo en formato 9:16.
 """
 
 import os
 import subprocess
 import sys
 from tkinter import filedialog, messagebox
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 import customtkinter as ctk
 from PIL import Image
@@ -17,6 +20,7 @@ from PIL import Image
 from models.producto import Producto
 from services.excel_manager import ExcelManager
 from services.flyer_generator import FlyerGenerator
+from views.theme_manager import ThemeManager
 
 
 class TabFlyer(ctk.CTkFrame):
@@ -30,6 +34,7 @@ class TabFlyer(ctk.CTkFrame):
 
     TITULOS_SUGERIDOS: List[str] = [
         "PROMOS DE HOY",
+        "NUESTRA CARTA COMPLETA",
         "MENÚ DEL DÍA",
         "ESPECIALES DE LA NOCHE",
         "COMBOS PARA COMPARTIR",
@@ -49,7 +54,10 @@ class TabFlyer(ctk.CTkFrame):
         self.productos_disponibles: List[Producto] = []
         self.checkbox_vars: Dict[int, ctk.BooleanVar] = {}
         self.plantilla_seleccionada: Optional[str] = None
+        self.logo_path: Optional[str] = None
         self.ultimo_flyer_generado: Optional[str] = None
+        self.modo_actual: str = FlyerGenerator.MODO_PROMOS_DESTACADAS
+        self._seleccion_promos_backup: Set[int] = set()
 
         # Referencia persistente a la instancia de CTkImage para evitar que el
         # Garbage Collector (GC) de Python destruya la imagen del canvas en memoria
@@ -67,187 +75,349 @@ class TabFlyer(ctk.CTkFrame):
         self.grid_rowconfigure(0, weight=1)
 
     def _construir_panel_configuracion(self) -> None:
-        """Construye la zona izquierda con selección de platos y ajustes del flyer."""
-        panel_izq = ctk.CTkFrame(self, fg_color="transparent")
+        """Construye la zona izquierda con selector de modo, selección de platos y ajustes."""
+        panel_izq = ctk.CTkScrollableFrame(self, fg_color="transparent")
         panel_izq.grid(row=0, column=0, sticky="nsew", padx=(4, 10), pady=4)
         panel_izq.grid_columnconfigure(0, weight=1)
-        panel_izq.grid_rowconfigure(0, weight=1)
+        panel_izq.grid_rowconfigure(1, weight=1)
+
+        # --- Bloque 0: Selector de Modo de Generación (Promos Destacadas vs Menú Completo) ---
+        card_modo = ctk.CTkFrame(
+            panel_izq,
+            corner_radius=12,
+            fg_color=ThemeManager.BG_CARD,
+            border_width=1,
+            border_color=ThemeManager.BORDER_CARD,
+        )
+        card_modo.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        card_modo.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(
+            card_modo,
+            text="Modo de Generación:",
+            font=ThemeManager.font_body_bold(),
+            text_color=ThemeManager.TEXT_MAIN,
+        ).grid(row=0, column=0, sticky="w", padx=(16, 12), pady=6)
+
+        self.seg_modo_flyer = ctk.CTkSegmentedButton(
+            card_modo,
+            values=FlyerGenerator.MODOS_DISPONIBLES,
+            height=32,
+            font=ThemeManager.font_body_bold(),
+            selected_color=ThemeManager.COLOR_ACCENT[1],
+            selected_hover_color=ThemeManager.COLOR_ACCENT_HOVER[1],
+            command=self._al_cambiar_modo_generacion,
+        )
+        self.seg_modo_flyer.set(FlyerGenerator.MODO_PROMOS_DESTACADAS)
+        self.seg_modo_flyer.grid(row=0, column=1, sticky="ew", padx=(0, 16), pady=6)
 
         # --- Bloque 1: Selección de Productos mediante Checkboxes ---
-        card_seleccion = ctk.CTkFrame(panel_izq, corner_radius=12)
-        card_seleccion.grid(row=0, column=0, sticky="nsew", pady=(0, 10))
+        card_seleccion = ctk.CTkFrame(
+            panel_izq,
+            corner_radius=12,
+            fg_color=ThemeManager.BG_CARD,
+            border_width=1,
+            border_color=ThemeManager.BORDER_CARD,
+        )
+        card_seleccion.grid(row=1, column=0, sticky="nsew", pady=(0, 6))
         card_seleccion.grid_columnconfigure(0, weight=1)
         card_seleccion.grid_rowconfigure(1, weight=1)
 
         header_sel = ctk.CTkFrame(card_seleccion, fg_color="transparent")
-        header_sel.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 8))
+        header_sel.grid(row=0, column=0, sticky="ew", padx=16, pady=(8, 4))
         header_sel.grid_columnconfigure(0, weight=1)
 
-        ctk.CTkLabel(
+        self.lbl_titulo_seleccion = ctk.CTkLabel(
             header_sel,
             text="1. Seleccione los Productos a Destacar (Máximo 6)",
-            font=ctk.CTkFont(size=15, weight="bold"),
-        ).grid(row=0, column=0, sticky="w")
+            font=ThemeManager.font_card_title(),
+            text_color=ThemeManager.TEXT_MAIN,
+        )
+        self.lbl_titulo_seleccion.grid(row=0, column=0, sticky="w")
 
         self.lbl_seleccionados = ctk.CTkLabel(
             header_sel,
             text="Seleccionados: 0 / 6",
-            font=ctk.CTkFont(size=12, weight="bold"),
-            text_color="#FBBF24",
+            font=ThemeManager.font_body_bold(),
+            text_color=ThemeManager.COLOR_NUMEROS_DESTACADOS,
         )
         self.lbl_seleccionados.grid(row=0, column=1, padx=(10, 10))
 
-        btn_sel_4 = ctk.CTkButton(
+        self.btn_accion_rapida_sel = ctk.CTkButton(
             header_sel,
             text="Marcar 4 primeros",
-            width=125,
-            height=28,
-            fg_color="#334155",
-            hover_color="#475569",
-            font=ctk.CTkFont(size=11),
-            command=self._seleccionar_primeros_cuatro,
+            width=135,
+            height=30,
+            fg_color=ThemeManager.BTN_SECONDARY,
+            hover_color=ThemeManager.BTN_SECONDARY_HOVER,
+            text_color=ThemeManager.BTN_SECONDARY_TEXT,
+            font=ThemeManager.font_small_bold(),
+            command=self._accion_boton_marcar_rapido,
         )
-        btn_sel_4.grid(row=0, column=2, padx=(0, 6))
+        self.btn_accion_rapida_sel.grid(row=0, column=2, padx=(0, 6))
 
         btn_desmarcar = ctk.CTkButton(
             header_sel,
             text="Limpiar",
             width=80,
-            height=28,
-            fg_color="#475569",
-            hover_color="#334155",
-            font=ctk.CTkFont(size=11),
+            height=30,
+            fg_color=ThemeManager.BTN_SECONDARY,
+            hover_color=ThemeManager.BTN_SECONDARY_HOVER,
+            text_color=ThemeManager.BTN_SECONDARY_TEXT,
+            font=ThemeManager.font_small_bold(),
             command=self._desmarcar_todos,
         )
         btn_desmarcar.grid(row=0, column=3)
 
         self.scroll_productos = ctk.CTkScrollableFrame(
             card_seleccion,
+            height=230,
             corner_radius=8,
-            label_text="Platos disponibles en 'datos_rotiseria.xlsx'",
+            fg_color=ThemeManager.BG_BOX_INTERNO,
         )
-        self.scroll_productos.grid(row=1, column=0, sticky="nsew", padx=16, pady=(0, 14))
+        self.scroll_productos.grid(row=1, column=0, sticky="nsew", padx=14, pady=(0, 8))
         self.scroll_productos.grid_columnconfigure(0, weight=1)
+        self.scroll_productos.grid_rowconfigure(0, weight=1)
 
         # --- Bloque 2: Personalización Visual y Generación ---
-        card_ajustes = ctk.CTkFrame(panel_izq, corner_radius=12)
-        card_ajustes.grid(row=1, column=0, sticky="ew")
+        card_ajustes = ctk.CTkFrame(
+            panel_izq,
+            corner_radius=12,
+            fg_color=ThemeManager.BG_CARD,
+            border_width=1,
+            border_color=ThemeManager.BORDER_CARD,
+        )
+        card_ajustes.grid(row=2, column=0, sticky="ew")
         card_ajustes.grid_columnconfigure(0, weight=1)
         card_ajustes.grid_columnconfigure(1, weight=1)
 
         ctk.CTkLabel(
             card_ajustes,
-            text="2. Personalización del Flyer y Datos de Contacto",
-            font=ctk.CTkFont(size=15, weight="bold"),
-        ).grid(row=0, column=0, columnspan=2, sticky="w", padx=16, pady=(12, 8))
+            text="2. Personalización del Flyer y Plantilla Visual",
+            font=ThemeManager.font_card_title(),
+            text_color=ThemeManager.TEXT_MAIN,
+        ).grid(row=0, column=0, columnspan=2, sticky="w", padx=16, pady=(8, 4))
 
-        # Título y WhatsApp
+        # Fila 1: Título y WhatsApp
         ctk.CTkLabel(
             card_ajustes,
-            text="Título Principal del Encabezado:",
-            font=ctk.CTkFont(size=12, weight="bold"),
-        ).grid(row=1, column=0, sticky="w", padx=16, pady=(0, 2))
+            text="Título del Encabezado:",
+            font=ThemeManager.font_body_bold(),
+            text_color=ThemeManager.TEXT_MAIN,
+        ).grid(row=1, column=0, sticky="w", padx=16, pady=(0, 1))
 
         ctk.CTkLabel(
             card_ajustes,
             text="WhatsApp de Pedidos (Pie de Página):",
-            font=ctk.CTkFont(size=12, weight="bold"),
-        ).grid(row=1, column=1, sticky="w", padx=16, pady=(0, 2))
+            font=ThemeManager.font_body_bold(),
+            text_color=ThemeManager.TEXT_MAIN,
+        ).grid(row=1, column=1, sticky="w", padx=16, pady=(0, 1))
 
         self.combo_titulo = ctk.CTkComboBox(
             card_ajustes,
             values=self.TITULOS_SUGERIDOS,
-            height=34,
+            height=32,
+            font=ThemeManager.font_input(),
             command=lambda _val: self._actualizar_preview_en_vivo(),
         )
         self.combo_titulo.set("PROMOS DE HOY")
-        self.combo_titulo.grid(row=2, column=0, sticky="ew", padx=(16, 8), pady=(0, 10))
+        self.combo_titulo.grid(row=2, column=0, sticky="ew", padx=(16, 8), pady=(0, 4))
         self.combo_titulo.bind("<KeyRelease>", lambda _e: self._actualizar_preview_en_vivo())
 
         self.entry_whatsapp = ctk.CTkEntry(
             card_ajustes,
-            placeholder_text="Ej: 3794-123456 / 11-4455-6677",
-            height=34,
+            placeholder_text="Ej: 3794-123456",
+            height=32,
+            font=ThemeManager.font_input(),
         )
         self.entry_whatsapp.insert(0, "3794-556677")
-        self.entry_whatsapp.grid(row=2, column=1, sticky="ew", padx=(8, 16), pady=(0, 10))
+        self.entry_whatsapp.grid(row=2, column=1, sticky="ew", padx=(8, 16), pady=(0, 4))
         self.entry_whatsapp.bind("<KeyRelease>", lambda _e: self._actualizar_preview_en_vivo())
 
-        # Selector de plantilla (.png / .jpg)
+        # Fila 2: Selector de Plantilla Predefinida (Multi-Plantillas) y Botón de Imagen Externa
         ctk.CTkLabel(
             card_ajustes,
-            text="Imagen de Plantilla Base (1080x1920 px):",
-            font=ctk.CTkFont(size=12, weight="bold"),
-        ).grid(row=3, column=0, columnspan=2, sticky="w", padx=16, pady=(0, 2))
+            text="Plantilla de Diseño Programática (Pillow):",
+            font=ThemeManager.font_body_bold(),
+            text_color=ThemeManager.TEXT_MAIN,
+        ).grid(row=3, column=0, sticky="w", padx=16, pady=(0, 1))
 
-        fila_plantilla = ctk.CTkFrame(card_ajustes, fg_color="transparent")
-        fila_plantilla.grid(row=4, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 12))
-        fila_plantilla.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(
+            card_ajustes,
+            text="Imagen de Fondo Personalizada (Opcional):",
+            font=ThemeManager.font_body_bold(),
+            text_color=ThemeManager.TEXT_MAIN,
+        ).grid(row=3, column=1, sticky="w", padx=16, pady=(0, 1))
 
-        self.lbl_plantilla_actual = ctk.CTkLabel(
-            fila_plantilla,
-            text="Fondo degradado oscuro elegante (Por defecto)",
-            font=ctk.CTkFont(size=12),
-            text_color="#38BDF8",
-            anchor="w",
+        self.combo_estilo = ctk.CTkOptionMenu(
+            card_ajustes,
+            values=FlyerGenerator.PLANTILLAS_DISPONIBLES,
+            height=32,
+            font=ThemeManager.font_body_bold(),
+            fg_color=ThemeManager.COLOR_ACCENT,
+            button_color=ThemeManager.COLOR_ACCENT_HOVER,
+            command=self._al_cambiar_estilo_plantilla,
         )
-        self.lbl_plantilla_actual.grid(row=0, column=0, sticky="ew", padx=(0, 10))
+        self.combo_estilo.set(FlyerGenerator.ESTILO_PIZARRA_BURGUER)
+        self.combo_estilo.grid(row=4, column=0, sticky="ew", padx=(16, 8), pady=(0, 4))
+
+        fila_btns_img = ctk.CTkFrame(card_ajustes, fg_color="transparent")
+        fila_btns_img.grid(row=4, column=1, sticky="ew", padx=(8, 16), pady=(0, 4))
+        fila_btns_img.grid_columnconfigure(0, weight=1)
 
         btn_elegir_plantilla = ctk.CTkButton(
-            fila_plantilla,
+            fila_btns_img,
             text="📂 Elegir Imagen (.png/.jpg)",
-            width=185,
             height=32,
-            fg_color="#2563EB",
-            hover_color="#1D4ED8",
+            font=ThemeManager.font_small_bold(),
+            fg_color=ThemeManager.BTN_SECONDARY,
+            hover_color=ThemeManager.BTN_SECONDARY_HOVER,
+            text_color=ThemeManager.BTN_SECONDARY_TEXT,
             command=self._seleccionar_archivo_plantilla,
         )
-        btn_elegir_plantilla.grid(row=0, column=1, padx=(0, 6))
+        btn_elegir_plantilla.grid(row=0, column=0, sticky="ew", padx=(0, 4))
 
-        btn_reset_plantilla = ctk.CTkButton(
-            fila_plantilla,
-            text="Usar Default",
-            width=105,
+        self.btn_reset_plantilla = ctk.CTkButton(
+            fila_btns_img,
+            text="Usar Estilo",
+            width=85,
             height=32,
-            fg_color="#475569",
-            hover_color="#334155",
+            font=ThemeManager.font_small_bold(),
+            fg_color=ThemeManager.BTN_SECONDARY,
+            hover_color=ThemeManager.BTN_SECONDARY_HOVER,
+            text_color=ThemeManager.BTN_SECONDARY_TEXT,
             command=self._restablecer_plantilla_default,
         )
-        btn_reset_plantilla.grid(row=0, column=2)
+        self.btn_reset_plantilla.grid(row=0, column=1)
+
+        # Etiqueta de estado de plantilla activa
+        self.lbl_plantilla_actual = ctk.CTkLabel(
+            card_ajustes,
+            text=f"Plantilla activa: {FlyerGenerator.ESTILO_PIZARRA_BURGUER} (Grafito, acentos rojos y Bebas Neue)",
+            font=ThemeManager.font_small(),
+            text_color=ThemeManager.COLOR_NUMEROS_DESTACADOS,
+            anchor="w",
+        )
+        self.lbl_plantilla_actual.grid(
+            row=5, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 4)
+        )
+
+        # Fila 3: Logo del Comercio y Sello Promocional
+        ctk.CTkLabel(
+            card_ajustes,
+            text="Logo del Comercio (Header & Marca de Agua):",
+            font=ThemeManager.font_body_bold(),
+            text_color=ThemeManager.TEXT_MAIN,
+        ).grid(row=6, column=0, sticky="w", padx=16, pady=(0, 1))
+
+        ctk.CTkLabel(
+            card_ajustes,
+            text="Sello Promocional / Cinta de Oferta:",
+            font=ThemeManager.font_body_bold(),
+            text_color=ThemeManager.TEXT_MAIN,
+        ).grid(row=6, column=1, sticky="w", padx=16, pady=(0, 1))
+
+        fila_btns_logo = ctk.CTkFrame(card_ajustes, fg_color="transparent")
+        fila_btns_logo.grid(row=7, column=0, sticky="ew", padx=(16, 8), pady=(0, 4))
+        fila_btns_logo.grid_columnconfigure(0, weight=1)
+
+        btn_elegir_logo = ctk.CTkButton(
+            fila_btns_logo,
+            text="🖼 Elegir Logo (.png/.jpg)",
+            height=32,
+            font=ThemeManager.font_small_bold(),
+            fg_color=ThemeManager.BTN_SECONDARY,
+            hover_color=ThemeManager.BTN_SECONDARY_HOVER,
+            text_color=ThemeManager.BTN_SECONDARY_TEXT,
+            command=self._seleccionar_archivo_logo,
+        )
+        btn_elegir_logo.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+
+        self.btn_quitar_logo = ctk.CTkButton(
+            fila_btns_logo,
+            text="Quitar",
+            width=70,
+            height=32,
+            font=ThemeManager.font_small_bold(),
+            fg_color=ThemeManager.BTN_SECONDARY,
+            hover_color=ThemeManager.BTN_SECONDARY_HOVER,
+            text_color=ThemeManager.BTN_SECONDARY_TEXT,
+            command=self._quitar_logo,
+        )
+        self.btn_quitar_logo.grid(row=0, column=1)
+
+        self.combo_sello_promo = ctk.CTkOptionMenu(
+            card_ajustes,
+            values=FlyerGenerator.SELLOS_PROMO_DISPONIBLES,
+            height=32,
+            font=ThemeManager.font_body_bold(),
+            fg_color=ThemeManager.COLOR_ACCENT,
+            button_color=ThemeManager.COLOR_ACCENT_HOVER,
+            command=lambda _val: self._actualizar_preview_en_vivo(),
+        )
+        self.combo_sello_promo.set(FlyerGenerator.SELLO_NINGUNO)
+        self.combo_sello_promo.grid(row=7, column=1, sticky="ew", padx=(8, 16), pady=(0, 4))
+
+        self.lbl_logo_actual = ctk.CTkLabel(
+            card_ajustes,
+            text="Sin logo (No se estampará marca de agua)",
+            font=ThemeManager.font_small(),
+            text_color=ThemeManager.TEXT_MUTED,
+            anchor="w",
+        )
+        self.lbl_logo_actual.grid(row=8, column=0, sticky="ew", padx=(16, 8), pady=(0, 6))
+
+        self.lbl_sello_info = ctk.CTkLabel(
+            card_ajustes,
+            text="Sticker visible en la esquina del flyer",
+            font=ThemeManager.font_small(),
+            text_color=ThemeManager.TEXT_MUTED,
+            anchor="w",
+        )
+        self.lbl_sello_info.grid(row=8, column=1, sticky="ew", padx=(8, 16), pady=(0, 6))
 
         # Botón Principal de Generación
         self.btn_generar = ctk.CTkButton(
             card_ajustes,
             text="🎨  EXPORTAR FLYER PROMOCIONAL (1080x1920 px .PNG)",
-            height=44,
-            fg_color="#EA580C",
-            hover_color="#C2410C",
-            font=ctk.CTkFont(size=14, weight="bold"),
+            height=40,
+            fg_color=ThemeManager.BTN_PRIMARY,
+            hover_color=ThemeManager.BTN_PRIMARY_HOVER,
+            font=ThemeManager.font_card_title(),
             command=self._accion_generar_flyer,
         )
-        self.btn_generar.grid(row=5, column=0, columnspan=2, sticky="ew", padx=16, pady=(2, 14))
+        self.btn_generar.grid(
+            row=9, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 10)
+        )
 
     def _construir_panel_previsualizacion(self) -> None:
         """Construye la columna derecha con el lienzo escalado 9:16 de previsualización."""
-        card_preview = ctk.CTkFrame(self, corner_radius=12)
+        card_preview = ctk.CTkFrame(
+            self,
+            corner_radius=12,
+            fg_color=ThemeManager.BG_CARD,
+            border_width=1,
+            border_color=ThemeManager.BORDER_CARD,
+        )
         card_preview.grid(row=0, column=1, sticky="nsew", padx=(0, 4), pady=4)
         card_preview.grid_columnconfigure(0, weight=1)
         card_preview.grid_rowconfigure(1, weight=1)
 
         ctk.CTkLabel(
             card_preview,
-            text="Vista Previa (Formato 9:16)",
-            font=ctk.CTkFont(size=15, weight="bold"),
-        ).grid(row=0, column=0, padx=16, pady=(14, 4))
+            text="Vista Previa en Vivo (Formato 9:16)",
+            font=ThemeManager.font_card_title(),
+            text_color=ThemeManager.TEXT_MAIN,
+        ).grid(row=0, column=0, padx=16, pady=(12, 4))
 
         marco_imagen = ctk.CTkFrame(
             card_preview,
-            width=self.PREVIEW_WIDTH + 16,
-            height=self.PREVIEW_HEIGHT + 16,
+            width=self.PREVIEW_WIDTH + 14,
+            height=self.PREVIEW_HEIGHT + 14,
             corner_radius=12,
-            fg_color="#0F172A",
+            fg_color=ThemeManager.BG_BOX_INTERNO,
         )
-        marco_imagen.grid(row=1, column=0, padx=18, pady=6)
+        marco_imagen.grid(row=1, column=0, padx=16, pady=4)
 
         self.lbl_imagen_preview = ctk.CTkLabel(
             marco_imagen,
@@ -255,13 +425,13 @@ class TabFlyer(ctk.CTkFrame):
             width=self.PREVIEW_WIDTH,
             height=self.PREVIEW_HEIGHT,
         )
-        self.lbl_imagen_preview.pack(padx=8, pady=8)
+        self.lbl_imagen_preview.pack(padx=6, pady=6)
 
         self.lbl_ruta_exportada = ctk.CTkLabel(
             card_preview,
             text="Previsualización en vivo activa • Listo para exportar",
-            font=ctk.CTkFont(size=11),
-            text_color="#94A3B8",
+            font=ThemeManager.font_small(),
+            text_color=ThemeManager.TEXT_MUTED,
             wraplength=300,
         )
         self.lbl_ruta_exportada.grid(row=2, column=0, padx=14, pady=(2, 6))
@@ -270,23 +440,127 @@ class TabFlyer(ctk.CTkFrame):
             card_preview,
             text="📁 Abrir Carpeta output/",
             height=34,
-            fg_color="#334155",
-            hover_color="#475569",
+            font=ThemeManager.font_small_bold(),
+            fg_color=ThemeManager.BTN_SECONDARY,
+            hover_color=ThemeManager.BTN_SECONDARY_HOVER,
+            text_color=ThemeManager.BTN_SECONDARY_TEXT,
             command=self._abrir_carpeta_output,
         )
-        self.btn_abrir_output.grid(row=3, column=0, sticky="ew", padx=18, pady=(0, 14))
+        self.btn_abrir_output.grid(row=3, column=0, sticky="ew", padx=16, pady=(0, 12))
 
     # =========================================================================
-    # LÓGICA DE SELECCIÓN Y PREVISUALIZACIÓN EN VIVO ESCALADA
+    # LÓGICA DE MODOS DE GENERACIÓN, SELECCIÓN Y PREVISUALIZACIÓN EN VIVO
     # =========================================================================
+
+    def _al_cambiar_modo_generacion(self, nuevo_modo: str) -> None:
+        """
+        Alterna entre 'Modo Promos Destacadas' (1 a 6 tarjetas grandes) y
+        'Modo Menú Completo' (carta entera clasificada por categorías en 2 columnas).
+        """
+        modo_previo = self.modo_actual
+        self.modo_actual = nuevo_modo
+
+        if nuevo_modo == FlyerGenerator.MODO_MENU_COMPLETO:
+            if modo_previo == FlyerGenerator.MODO_PROMOS_DESTACADAS:
+                self._seleccion_promos_backup = {
+                    pid for pid, var in self.checkbox_vars.items() if var.get()
+                }
+            # En Modo Menú Completo se marcan todos los platos por defecto
+            for var in self.checkbox_vars.values():
+                var.set(True)
+
+            self.lbl_titulo_seleccion.configure(
+                text="1. Carta Completa por Secciones (2 Columnas)"
+            )
+            self.btn_accion_rapida_sel.configure(text="Marcar Todos")
+            self.btn_generar.configure(
+                text="📋  EXPORTAR MENÚ COMPLETO POR SECCIONES (1080x1920 .PNG)"
+            )
+            if self.combo_titulo.get().strip().upper() == "PROMOS DE HOY":
+                self.combo_titulo.set("NUESTRA CARTA COMPLETA")
+        else:
+            # Restaurar selección previa de Promos Destacadas (máximo 6)
+            if self._seleccion_promos_backup:
+                for pid, var in self.checkbox_vars.items():
+                    var.set(pid in self._seleccion_promos_backup)
+            else:
+                for idx, prod in enumerate(self.productos_disponibles):
+                    if prod.id in self.checkbox_vars:
+                        self.checkbox_vars[prod.id].set(idx < 4)
+
+            self.lbl_titulo_seleccion.configure(
+                text="1. Seleccione los Productos a Destacar (Máximo 6)"
+            )
+            self.btn_accion_rapida_sel.configure(text="Marcar 4 primeros")
+            self.btn_generar.configure(
+                text="🎨  EXPORTAR FLYER PROMOCIONAL (1080x1920 px .PNG)"
+            )
+            if self.combo_titulo.get().strip().upper() == "NUESTRA CARTA COMPLETA":
+                self.combo_titulo.set("PROMOS DE HOY")
+
+        self._actualizar_contador_seleccion()
+        self._actualizar_preview_en_vivo()
 
     def _obtener_productos_seleccionados(self) -> List[Producto]:
         """Retorna la lista de productos cuyos checkboxes están actualmente marcados."""
-        return [
+        marcados = [
             prod
             for prod in self.productos_disponibles
             if self.checkbox_vars.get(prod.id) and self.checkbox_vars[prod.id].get()
         ]
+        # Si está en Modo Menú Completo y ningún checkbox quedó tildado, exportar la carta entera
+        if self.modo_actual == FlyerGenerator.MODO_MENU_COMPLETO and not marcados:
+            return list(self.productos_disponibles)
+        return marcados
+
+    def _al_cambiar_estilo_plantilla(self, nuevo_estilo: str) -> None:
+        """Callback ejecutado al cambiar la plantilla desde el CTkOptionMenu."""
+        desc_map = {
+            FlyerGenerator.ESTILO_PIZARRA_BURGUER: "Grafito, acentos rojo brasa y tipografía Bebas Neue",
+            FlyerGenerator.ESTILO_PIZZERIA_RUSTICA: "Horno de leña y terracota con tipografía Playfair",
+            FlyerGenerator.ESTILO_FAST_FOOD_MOSTAZA: "Pop moderno amarillo mostaza con tarjetas contrastadas",
+            FlyerGenerator.ESTILO_TURQUESA_GLASS: "Glassmorphism moderno en petróleo y menta brillante",
+            FlyerGenerator.ESTILO_GOURMET_BISTRO: "Elegancia minimalista con filetes dorados y serif bistró",
+        }
+        detalle = desc_map.get(nuevo_estilo, nuevo_estilo)
+        if self.plantilla_seleccionada:
+            self.lbl_plantilla_actual.configure(
+                text=f"Plantilla activa: {nuevo_estilo} (sobre imagen personalizada)",
+                text_color=ThemeManager.COLOR_NUMEROS_DESTACADOS,
+            )
+        else:
+            self.lbl_plantilla_actual.configure(
+                text=f"Plantilla activa: {nuevo_estilo} ({detalle})",
+                text_color=ThemeManager.COLOR_NUMEROS_DESTACADOS,
+            )
+        self._actualizar_preview_en_vivo()
+
+    def _seleccionar_archivo_logo(self) -> None:
+        """Abre un cuadro de diálogo para seleccionar el logo del comercio (.png / .jpg)."""
+        ruta = filedialog.askopenfilename(
+            title="Seleccionar Logo del Comercio",
+            filetypes=[
+                ("Imágenes PNG / JPG", "*.png *.jpg *.jpeg *.webp"),
+                ("Todos los archivos", "*.*"),
+            ],
+        )
+        if ruta and os.path.exists(ruta):
+            self.logo_path = ruta
+            nombre_corto = os.path.basename(ruta)
+            self.lbl_logo_actual.configure(
+                text=f"✔ Logo activo: {nombre_corto} (Header + Marca de agua)",
+                text_color=ThemeManager.COLOR_NUMEROS_DESTACADOS,
+            )
+            self._actualizar_preview_en_vivo()
+
+    def _quitar_logo(self) -> None:
+        """Remueve el logo activo y la marca de agua translúcida."""
+        self.logo_path = None
+        self.lbl_logo_actual.configure(
+            text="Sin logo (No se estampará marca de agua)",
+            text_color=ThemeManager.TEXT_MUTED,
+        )
+        self._actualizar_preview_en_vivo()
 
     def refrescar_productos(self) -> None:
         """
@@ -307,26 +581,41 @@ class TabFlyer(ctk.CTkFrame):
             ctk.CTkLabel(
                 self.scroll_productos,
                 text="No hay productos cargados en el menú. Agregue platos desde la pestaña 'Gestión de Menú'.",
-                text_color="#94A3B8",
+                font=ThemeManager.font_body(),
+                text_color=ThemeManager.TEXT_MUTED,
             ).grid(row=0, column=0, padx=10, pady=20)
             self._actualizar_contador_seleccion()
             self._actualizar_preview_en_vivo()
             return
 
+        es_menu_completo = self.modo_actual == FlyerGenerator.MODO_MENU_COMPLETO
         preseleccionar_inicial = len(ids_previamente_marcados) == 0
 
         for idx, prod in enumerate(self.productos_disponibles):
             fila_item = ctk.CTkFrame(
-                self.scroll_productos, corner_radius=8, fg_color="#1E293B"
+                self.scroll_productos,
+                height=34,
+                corner_radius=6,
+                fg_color=ThemeManager.BG_CARD,
+                border_width=1,
+                border_color=ThemeManager.BORDER_CARD,
             )
-            fila_item.grid(row=idx, column=0, sticky="ew", padx=4, pady=4)
+            fila_item.grid(row=idx, column=0, sticky="ew", padx=4, pady=2)
             fila_item.grid_columnconfigure(0, weight=1)
 
-            marcado = (
-                (idx < 4)
-                if preseleccionar_inicial
-                else (prod.id in ids_previamente_marcados)
-            )
+            if es_menu_completo:
+                marcado = (
+                    True
+                    if preseleccionar_inicial
+                    else (prod.id in ids_previamente_marcados)
+                )
+            else:
+                marcado = (
+                    (idx < 4)
+                    if preseleccionar_inicial
+                    else (prod.id in ids_previamente_marcados)
+                )
+
             var = ctk.BooleanVar(value=marcado)
             self.checkbox_vars[prod.id] = var
 
@@ -335,46 +624,39 @@ class TabFlyer(ctk.CTkFrame):
                 fila_item,
                 text=texto_cb,
                 variable=var,
-                font=ctk.CTkFont(size=13, weight="bold"),
+                font=ThemeManager.font_product_name(),
+                text_color=ThemeManager.TEXT_MAIN,
                 command=lambda p_id=prod.id: self._al_cambiar_checkbox(p_id),
             )
-            cb.grid(row=0, column=0, sticky="w", padx=12, pady=(8, 4))
+            cb.grid(row=0, column=0, sticky="w", padx=10, pady=3)
 
             lbl_precio = ctk.CTkLabel(
                 fila_item,
                 text=prod.precio_formateado,
-                font=ctk.CTkFont(size=14, weight="bold"),
-                text_color="#FBBF24",
+                font=ThemeManager.font_price_highlight(),
+                text_color=ThemeManager.COLOR_NUMEROS_DESTACADOS,
             )
-            lbl_precio.grid(row=0, column=1, sticky="e", padx=12, pady=(8, 4))
-
-            if prod.descripcion:
-                lbl_desc = ctk.CTkLabel(
-                    fila_item,
-                    text=prod.descripcion,
-                    font=ctk.CTkFont(size=11),
-                    text_color="#94A3B8",
-                    anchor="w",
-                )
-                lbl_desc.grid(
-                    row=1, column=0, columnspan=2, sticky="w", padx=38, pady=(0, 6)
-                )
+            lbl_precio.grid(row=0, column=1, sticky="e", padx=10, pady=3)
 
         self._actualizar_contador_seleccion()
         self._actualizar_preview_en_vivo()
 
     def _al_cambiar_checkbox(self, prod_id: int) -> None:
         """
-        Verifica el cupo máximo de 6 productos por flyer y actualiza inmediatamente
-        la imagen de la columna Vista Previa (Formato 9:16).
+        Verifica el cupo máximo de 6 productos en 'Modo Promos Destacadas'
+        (sin límite en 'Modo Menú Completo') y actualiza la Vista Previa en vivo.
         """
         marcados = [pid for pid, var in self.checkbox_vars.items() if var.get()]
-        if len(marcados) > FlyerGenerator.MAX_PRODUCTOS:
+        if (
+            self.modo_actual == FlyerGenerator.MODO_PROMOS_DESTACADAS
+            and len(marcados) > FlyerGenerator.MAX_PRODUCTOS
+        ):
             self.checkbox_vars[prod_id].set(False)
             messagebox.showwarning(
-                "Límite de Diseño Alcanzado",
-                f"Para garantizar la legibilidad en celulares, se permiten hasta "
-                f"{FlyerGenerator.MAX_PRODUCTOS} productos por flyer.",
+                "Límite de Promos Destacadas Alcanzado",
+                f"En 'Modo Promos Destacadas' se permiten hasta {FlyerGenerator.MAX_PRODUCTOS} "
+                f"productos para garantizar la legibilidad.\n\n"
+                f"💡 Si desea exportar todos los platos, cambie a 'Modo Menú Completo'.",
             )
             return
 
@@ -382,13 +664,37 @@ class TabFlyer(ctk.CTkFrame):
         self._actualizar_preview_en_vivo()
 
     def _actualizar_contador_seleccion(self) -> None:
-        """Actualiza la etiqueta del contador de productos marcados."""
+        """Actualiza la etiqueta del contador según el modo de generación activo."""
         cant = sum(1 for var in self.checkbox_vars.values() if var.get())
-        color = "#4ADE80" if 1 <= cant <= FlyerGenerator.MAX_PRODUCTOS else "#F87171"
-        self.lbl_seleccionados.configure(
-            text=f"Seleccionados: {cant} / {FlyerGenerator.MAX_PRODUCTOS}",
-            text_color=color,
-        )
+        if self.modo_actual == FlyerGenerator.MODO_MENU_COMPLETO:
+            prods_activos = self._obtener_productos_seleccionados()
+            cats = len({p.categoria for p in prods_activos})
+            self.lbl_seleccionados.configure(
+                text=f"Carta: {len(prods_activos)} platos ({cats} secc.)",
+                text_color=ThemeManager.COLOR_NUMEROS_DESTACADOS,
+            )
+        else:
+            color = (
+                ThemeManager.COLOR_NUMEROS_DESTACADOS
+                if 1 <= cant <= FlyerGenerator.MAX_PRODUCTOS
+                else ("#DC2626", "#F87171")
+            )
+            self.lbl_seleccionados.configure(
+                text=f"Seleccionados: {cant} / {FlyerGenerator.MAX_PRODUCTOS}",
+                text_color=color,
+            )
+
+    def _accion_boton_marcar_rapido(self) -> None:
+        """Marca todos los productos en Modo Menú Completo o los primeros 4 en Modo Promos."""
+        if self.modo_actual == FlyerGenerator.MODO_MENU_COMPLETO:
+            for var in self.checkbox_vars.values():
+                var.set(True)
+        else:
+            for idx, prod in enumerate(self.productos_disponibles):
+                if prod.id in self.checkbox_vars:
+                    self.checkbox_vars[prod.id].set(idx < 4)
+        self._actualizar_contador_seleccion()
+        self._actualizar_preview_en_vivo()
 
     def _seleccionar_primeros_cuatro(self) -> None:
         """Marca automáticamente los primeros 4 productos de la lista y refresca la vista previa."""
@@ -418,20 +724,18 @@ class TabFlyer(ctk.CTkFrame):
         if ruta and os.path.exists(ruta):
             self.plantilla_seleccionada = ruta
             nombre_corto = os.path.basename(ruta)
+            estilo_actual = self.combo_estilo.get()
             self.lbl_plantilla_actual.configure(
-                text=f"Plantilla activa: {nombre_corto}",
-                text_color="#4ADE80",
+                text=f"Imagen activa: {nombre_corto} (Esquema: {estilo_actual})",
+                text_color=ThemeManager.COLOR_NUMEROS_DESTACADOS,
             )
             self._actualizar_preview_en_vivo()
 
     def _restablecer_plantilla_default(self) -> None:
-        """Vuelve a configurar el fondo degradado oscuro programático por defecto."""
+        """Vuelve a configurar el fondo degradado programático de la plantilla elegida."""
         self.plantilla_seleccionada = None
-        self.lbl_plantilla_actual.configure(
-            text="Fondo degradado oscuro elegante (Por defecto)",
-            text_color="#38BDF8",
-        )
-        self._actualizar_preview_en_vivo()
+        estilo = self.combo_estilo.get()
+        self._al_cambiar_estilo_plantilla(estilo)
 
     def _renderizar_pil_en_preview(self, imagen_pil: Image.Image) -> None:
         """
@@ -464,8 +768,9 @@ class TabFlyer(ctk.CTkFrame):
 
     def _actualizar_preview_en_vivo(self) -> None:
         """
-        Compone dinámicamente en memoria el flyer con los platos actualmente tildados
-        y actualiza en tiempo real la columna 'Vista Previa (Formato 9:16)'.
+        Compone dinámicamente en memoria el flyer según el modo activo
+        ('Modo Promos Destacadas' o 'Modo Menú Completo') y la plantilla seleccionada,
+        actualizando en tiempo real la Vista Previa.
         """
         if not hasattr(self, "lbl_imagen_preview"):
             return
@@ -481,20 +786,34 @@ class TabFlyer(ctk.CTkFrame):
             if hasattr(self, "entry_whatsapp")
             else ""
         )
+        estilo = (
+            self.combo_estilo.get()
+            if hasattr(self, "combo_estilo") and self.combo_estilo.get()
+            else FlyerGenerator.ESTILO_PIZARRA_BURGUER
+        )
+        sello_promo = (
+            self.combo_sello_promo.get()
+            if hasattr(self, "combo_sello_promo")
+            else None
+        )
 
         try:
             lienzo_vivo = self.flyer_generator.componer_imagen_flyer(
                 productos=productos_elegidos,
                 plantilla_path=self.plantilla_seleccionada,
+                estilo=estilo,
                 titulo=titulo,
                 whatsapp=whatsapp,
+                modo=self.modo_actual,
+                logo_path=self.logo_path,
+                sello_promo=sello_promo,
             )
             self._renderizar_pil_en_preview(lienzo_vivo)
         except Exception as err:
             self.lbl_imagen_preview.configure(text=f"Error en vista previa:\n{err}")
 
     def _accion_generar_flyer(self) -> None:
-        """Recopila los productos seleccionados y exporta el flyer promocional en alta resolución."""
+        """Recopila los productos y exporta el flyer o carta completa en alta resolución."""
         productos_elegidos = self._obtener_productos_seleccionados()
 
         if not productos_elegidos:
@@ -506,13 +825,27 @@ class TabFlyer(ctk.CTkFrame):
 
         titulo = self.combo_titulo.get().strip() or "PROMOS DE HOY"
         whatsapp = self.entry_whatsapp.get().strip()
+        estilo = (
+            self.combo_estilo.get()
+            if hasattr(self, "combo_estilo")
+            else FlyerGenerator.ESTILO_PIZARRA_BURGUER
+        )
+        sello_promo = (
+            self.combo_sello_promo.get()
+            if hasattr(self, "combo_sello_promo")
+            else None
+        )
 
         try:
             ruta_exportada = self.flyer_generator.generar_flyer(
                 productos=productos_elegidos,
                 plantilla_path=self.plantilla_seleccionada,
+                estilo=estilo,
                 titulo=titulo,
                 whatsapp=whatsapp,
+                modo=self.modo_actual,
+                logo_path=self.logo_path,
+                sello_promo=sello_promo,
             )
             self.ultimo_flyer_generado = ruta_exportada
             self._cargar_imagen_en_preview(ruta_exportada)
@@ -520,11 +853,11 @@ class TabFlyer(ctk.CTkFrame):
             nombre_archivo = os.path.basename(ruta_exportada)
             self.lbl_ruta_exportada.configure(
                 text=f"✔ Exportado: output/{nombre_archivo}",
-                text_color="#4ADE80",
+                text_color=ThemeManager.COLOR_NUMEROS_DESTACADOS,
             )
             messagebox.showinfo(
                 "Flyer Generado con Éxito",
-                f"El flyer promocional (1080x1920 px) se guardó en:\n\n{ruta_exportada}",
+                f"El diseño [{self.modo_actual} — {estilo}] (1080x1920 px) se guardó en:\n\n{ruta_exportada}",
             )
         except Exception as err:
             messagebox.showerror(

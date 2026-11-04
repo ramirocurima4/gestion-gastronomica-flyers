@@ -30,7 +30,7 @@ def configurar_logging() -> None:
 def verificar_directorios_sistema(base_dir: str = BASE_DIR) -> dict[str, str]:
     """
     Asegura la existencia de las carpetas críticas del sistema:
-    `data/`, `output/` y `templates/`.
+    `data/`, `output/`, `templates/` y `assets/fonts/`.
 
     Returns:
         dict[str, str]: Diccionario con las rutas absolutas verificadas.
@@ -39,6 +39,7 @@ def verificar_directorios_sistema(base_dir: str = BASE_DIR) -> dict[str, str]:
         "data": os.path.join(base_dir, "data"),
         "output": os.path.join(base_dir, "output"),
         "templates": os.path.join(base_dir, "templates"),
+        "fonts": os.path.join(base_dir, "assets", "fonts"),
     }
     for nombre, ruta in rutas.items():
         os.makedirs(ruta, exist_ok=True)
@@ -49,22 +50,24 @@ def verificar_directorios_sistema(base_dir: str = BASE_DIR) -> dict[str, str]:
 def inicializar_servicios(rutas: dict[str, str]) -> tuple[ExcelManager, FlyerGenerator]:
     """
     Instancia e inicializa los servicios centrales de la aplicación (`ExcelManager`
-    y `FlyerGenerator`), poblando datos de ejemplo si el archivo Excel se crea por primera vez.
+    y `FlyerGenerator`), poblando datos de ejemplo si el archivo Excel se crea por primera vez
+    o si dispone de un surtido inicial incompleto.
     """
     ruta_excel = os.path.join(rutas["data"], "datos_rotiseria.xlsx")
     primer_inicio = not os.path.exists(ruta_excel)
 
     excel_manager = ExcelManager(filepath=ruta_excel)
-    if primer_inicio:
-        insertados = excel_manager.sembrar_datos_ejemplo_si_vacio()
+    if primer_inicio or len(excel_manager.obtener_productos()) < 15:
+        insertados = excel_manager.poblar_catalogo_demostracion()
         logging.getLogger(__name__).info(
-            "Archivo 'datos_rotiseria.xlsx' inicializado con %d productos de muestra.",
+            "Catálogo gastronómico de demostración poblado con %d platos y bebidas.",
             insertados,
         )
 
     flyer_generator = FlyerGenerator(
         templates_dir=rutas["templates"],
         output_dir=rutas["output"],
+        fonts_dir=rutas["fonts"],
     )
     return excel_manager, flyer_generator
 
